@@ -1,0 +1,9 @@
+{
+  "id": "aethersweb",
+  "name": "AethersWeb",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Hash-verified, self-describing space structure for your vault: logs, contexts, and reconciliation.",
+  "author": "sexyparabola",
+  "isDesktopOnly": true
+}

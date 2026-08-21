@@ -1,1 +1,389 @@
 /* AethersWeb plugin styles — populated as settings UI / views grow. */
+
+/* ---- .aether log view ---------------------------------------------------- */
+
+.aetherweb-log-view {
+	padding: 4px 2px;
+}
+
+.aetherweb-log-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	padding: 48px 16px;
+	color: var(--text-muted);
+	text-align: center;
+}
+
+.aetherweb-log-empty svg {
+	width: 32px;
+	height: 32px;
+	opacity: 0.6;
+}
+
+/* Super-space / sub-space goto nav */
+
+.aetherweb-nav {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 10px;
+}
+
+.aetherweb-nav-empty {
+	font-size: 0.82em;
+	color: var(--text-faint);
+}
+
+.aetherweb-nav-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 9px;
+	border-radius: 999px;
+	border: 1px solid var(--background-modifier-border);
+	font-size: 0.82em;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.aetherweb-nav-link svg {
+	width: 11px;
+	height: 11px;
+}
+
+.aetherweb-nav-link:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.aetherweb-nav-link.is-up {
+	color: rgb(var(--color-blue-rgb));
+	border-color: rgba(var(--color-blue-rgb), 0.4);
+}
+
+.aetherweb-nav-link.is-down {
+	color: rgb(var(--color-green-rgb));
+	border-color: rgba(var(--color-green-rgb), 0.4);
+}
+
+/* Header */
+
+.aetherweb-log-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+
+.aetherweb-log-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.aetherweb-log-title h3 {
+	margin: 0;
+	font-size: 1.05em;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.aetherweb-chain-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	font-size: 0.78em;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.aetherweb-chain-badge svg {
+	width: 12px;
+	height: 12px;
+}
+
+.aetherweb-chain-badge.is-ok {
+	background: rgba(var(--color-green-rgb), 0.15);
+	color: rgb(var(--color-green-rgb));
+}
+
+.aetherweb-chain-badge.is-broken {
+	background: rgba(var(--color-red-rgb), 0.18);
+	color: rgb(var(--color-red-rgb));
+}
+
+/* Stat chips */
+
+.aetherweb-stat-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-bottom: 10px;
+}
+
+.aetherweb-stat-chip {
+	font-size: 0.76em;
+	padding: 2px 7px;
+	border-radius: 999px;
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+.aetherweb-stat-chip.is-detected {
+	background: rgba(var(--color-yellow-rgb), 0.18);
+	color: rgb(var(--color-yellow-rgb));
+}
+
+/* Toolbar */
+
+.aetherweb-toolbar {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-bottom: 10px;
+}
+
+.aetherweb-search-input {
+	flex: 1 1 160px;
+	min-width: 120px;
+	font-size: 0.85em;
+}
+
+.aetherweb-type-filters {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+.aetherweb-type-chip {
+	cursor: pointer;
+	user-select: none;
+	font-size: 0.75em;
+	padding: 2px 8px;
+	border-radius: 999px;
+	border: 1px solid var(--background-modifier-border);
+	background: transparent;
+	color: var(--text-muted);
+	transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.aetherweb-type-chip.is-active {
+	font-weight: 600;
+}
+
+.aetherweb-type-chip.is-inactive {
+	opacity: 0.5;
+	background: transparent;
+	text-decoration: line-through;
+}
+
+/* Active filter chips are filled with the same color as their type's row pill, so the
+   toolbar and the table read as one system; inactive ones fall back to the plain outline
+   above regardless of type. */
+.aetherweb-type-chip.is-active.type-space_created {
+	background: rgba(var(--color-purple-rgb), 0.3);
+	color: rgb(var(--color-purple-rgb));
+}
+
+.aetherweb-type-chip.is-active.type-file_created {
+	background: rgba(var(--color-green-rgb), 0.3);
+	color: rgb(var(--color-green-rgb));
+}
+
+.aetherweb-type-chip.is-active.type-file_modified {
+	background: rgba(var(--color-blue-rgb), 0.3);
+	color: rgb(var(--color-blue-rgb));
+}
+
+.aetherweb-type-chip.is-active.type-file_deleted {
+	background: rgba(var(--color-red-rgb), 0.3);
+	color: rgb(var(--color-red-rgb));
+}
+
+.aetherweb-type-chip.is-active.type-file_renamed {
+	background: rgba(var(--color-cyan-rgb), 0.3);
+	color: rgb(var(--color-cyan-rgb));
+}
+
+.aetherweb-type-chip.is-active.type-subspace_created {
+	background: rgba(var(--color-orange-rgb), 0.3);
+	color: rgb(var(--color-orange-rgb));
+}
+
+.aetherweb-type-chip.is-active.type-subspace_removed {
+	background: rgba(var(--color-pink-rgb), 0.3);
+	color: rgb(var(--color-pink-rgb));
+}
+
+.aetherweb-type-chip.is-active.type-checkpoint {
+	background: var(--background-modifier-border);
+	color: var(--text-normal);
+}
+
+.aetherweb-toolbar-btn {
+	font-size: 0.78em;
+	padding: 3px 9px;
+}
+
+.aetherweb-toolbar-btn.is-active {
+	color: var(--interactive-accent);
+	border-color: var(--interactive-accent);
+}
+
+/* Table */
+
+.aetherweb-table-wrap {
+	overflow-x: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s, 6px);
+}
+
+.aetherweb-log-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.83em;
+}
+
+.aetherweb-log-table th {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	text-align: left;
+	padding: 6px 10px;
+	background: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+	white-space: nowrap;
+	font-weight: 600;
+	color: var(--text-muted);
+}
+
+.aetherweb-log-table td {
+	padding: 5px 10px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	white-space: nowrap;
+	vertical-align: middle;
+}
+
+.aetherweb-log-table td.aetherweb-col-payload {
+	white-space: normal;
+	color: var(--text-muted);
+}
+
+.aetherweb-log-table tbody tr:hover {
+	background: var(--background-modifier-hover);
+	cursor: pointer;
+}
+
+.aetherweb-log-table tbody tr.is-broken-row {
+	background: rgba(var(--color-red-rgb), 0.08);
+}
+
+.aetherweb-log-table tbody tr.is-broken-row:hover {
+	background: rgba(var(--color-red-rgb), 0.14);
+}
+
+.aetherweb-seq-cell {
+	color: var(--text-faint);
+	font-family: var(--font-monospace);
+}
+
+.aetherweb-type-pill,
+.aetherweb-source-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 1px 7px;
+	border-radius: 999px;
+	font-size: 0.92em;
+	white-space: nowrap;
+}
+
+.aetherweb-type-pill svg {
+	width: 11px;
+	height: 11px;
+}
+
+.aetherweb-source-pill.is-observed {
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+}
+
+.aetherweb-source-pill.is-detected {
+	background: rgba(var(--color-yellow-rgb), 0.18);
+	color: rgb(var(--color-yellow-rgb));
+}
+
+.aetherweb-type-pill.type-space_created {
+	background: rgba(var(--color-purple-rgb), 0.15);
+	color: rgb(var(--color-purple-rgb));
+}
+
+.aetherweb-type-pill.type-file_created {
+	background: rgba(var(--color-green-rgb), 0.15);
+	color: rgb(var(--color-green-rgb));
+}
+
+.aetherweb-type-pill.type-file_modified {
+	background: rgba(var(--color-blue-rgb), 0.15);
+	color: rgb(var(--color-blue-rgb));
+}
+
+.aetherweb-type-pill.type-file_deleted {
+	background: rgba(var(--color-red-rgb), 0.15);
+	color: rgb(var(--color-red-rgb));
+}
+
+.aetherweb-type-pill.type-file_renamed {
+	background: rgba(var(--color-cyan-rgb), 0.15);
+	color: rgb(var(--color-cyan-rgb));
+}
+
+.aetherweb-type-pill.type-subspace_created {
+	background: rgba(var(--color-orange-rgb), 0.15);
+	color: rgb(var(--color-orange-rgb));
+}
+
+.aetherweb-type-pill.type-subspace_removed {
+	background: rgba(var(--color-pink-rgb), 0.15);
+	color: rgb(var(--color-pink-rgb));
+}
+
+.aetherweb-type-pill.type-checkpoint {
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+}
+
+.aetherweb-hash-chip {
+	font-family: var(--font-monospace);
+	color: var(--text-muted);
+	cursor: pointer;
+	border-bottom: 1px dotted var(--text-faint);
+}
+
+.aetherweb-hash-chip:hover {
+	color: var(--text-accent);
+}
+
+.aetherweb-detail-row td {
+	background: var(--background-secondary);
+	white-space: normal;
+}
+
+.aetherweb-detail-row pre {
+	margin: 0;
+	font-size: 0.85em;
+	white-space: pre-wrap;
+	word-break: break-all;
+}

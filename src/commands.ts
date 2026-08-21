@@ -5,7 +5,7 @@ import { regenerateContext } from "./context";
 import { verifyChain } from "./hash";
 import { readLog } from "./log";
 import { reconcileVault } from "./reconcile";
-import { findOwningSpace, walkSpaces } from "./space";
+import { findOwningSpace, isSpace, walkSpaces } from "./space";
 import type AethersWebPlugin from "./main";
 
 class NamePromptModal extends Modal {
@@ -266,33 +266,22 @@ export function registerContextMenus(plugin: AethersWebPlugin): void {
 						).open();
 					}),
 			);
+
+			menu.addItem((item) =>
+				item
+					.setTitle("View .aether log")
+					.setIcon("database")
+					.onClick(async () => {
+						if (!(await isSpace(file, app))) {
+							new Notice("AethersWeb: this folder isn't a claimed space yet");
+							return;
+						}
+						const existing = app.workspace.getLeavesOfType(AETHER_VIEW_TYPE);
+						const leaf = existing[0] ?? app.workspace.getLeaf("tab");
+						await leaf.setViewState({ type: AETHER_VIEW_TYPE, active: true, state: { spacePath: file.path } });
+						app.workspace.revealLeaf(leaf);
+					}),
+			);
 		}),
 	);
-}
-
-/**
- * Adds a ribbon icon that toggles the ".aether folders" inspector panel open/closed in the
- * right sidebar. A CSS visibility toggle can't do this job: ".aether/" is a dotfolder, and
- * Obsidian never indexes dotfolders into the vault tree at all (see aether-view.ts), so there
- * are no File Explorer DOM nodes for it to reveal. This opens/closes a dedicated read-only view
- * instead, built by reading .aether/ directly off the raw adapter.
- */
-export function registerAetherViewToggle(plugin: AethersWebPlugin): void {
-	const { app } = plugin;
-
-	plugin.addRibbonIcon("eye", "AethersWeb: toggle .aether folders", async () => {
-		const existing = app.workspace.getLeavesOfType(AETHER_VIEW_TYPE);
-		if (existing.length > 0) {
-			for (const leaf of existing) leaf.detach();
-			return;
-		}
-
-		const leaf = app.workspace.getRightLeaf(false);
-		if (!leaf) {
-			new Notice("AethersWeb: couldn't open the .aether view — no right sidebar available");
-			return;
-		}
-		await leaf.setViewState({ type: AETHER_VIEW_TYPE, active: true });
-		await app.workspace.revealLeaf(leaf);
-	});
 }

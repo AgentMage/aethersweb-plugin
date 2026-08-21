@@ -1,5 +1,6 @@
 import { Plugin } from "obsidian";
-import { registerCommands, registerContextMenus, registerRibbon } from "./commands";
+import { AetherFolderView, AETHER_VIEW_TYPE } from "./aether-view";
+import { registerAetherViewToggle, registerCommands, registerContextMenus, registerRibbon } from "./commands";
 import { registerVaultEventHandlers } from "./events";
 import { reconcileVault } from "./reconcile";
 import { AethersWebSettingTab } from "./settings";
@@ -12,9 +13,11 @@ export default class AethersWebPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.addSettingTab(new AethersWebSettingTab(this.app, this));
+		this.registerView(AETHER_VIEW_TYPE, (leaf) => new AetherFolderView(leaf, this));
 		registerCommands(this);
 		registerContextMenus(this);
 		registerRibbon(this);
+		registerAetherViewToggle(this);
 
 		// Reconciliation must complete before live event listeners attach, so reconciliation's
 		// own writes are never double-counted as "observed" — and folder listings need the

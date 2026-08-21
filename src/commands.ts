@@ -1,4 +1,5 @@
-import { App, Modal, Notice, TFolder } from "obsidian";
+import { App, Modal, normalizePath, Notice, TFolder } from "obsidian";
+import { AETHER_VIEW_TYPE } from "./aether-view";
 import { scaffoldSpace } from "./bootstrap";
 import { regenerateContext } from "./context";
 import { verifyChain } from "./hash";
@@ -10,11 +11,21 @@ import type AethersWebPlugin from "./main";
 class NamePromptModal extends Modal {
 	private onSubmit: (name: string) => void;
 	private title: string;
+	private initialValue: string;
+	private submitLabel: string;
 
-	constructor(app: App, title: string, onSubmit: (name: string) => void) {
+	constructor(
+		app: App,
+		title: string,
+		onSubmit: (name: string) => void,
+		initialValue = "",
+		submitLabel = "Create",
+	) {
 		super(app);
 		this.title = title;
 		this.onSubmit = onSubmit;
+		this.initialValue = initialValue;
+		this.submitLabel = submitLabel;
 	}
 
 	onOpen(): void {
@@ -23,13 +34,15 @@ class NamePromptModal extends Modal {
 
 		const input = contentEl.createEl("input", { type: "text", attr: { placeholder: "Name" } });
 		input.style.width = "100%";
+		input.value = this.initialValue;
 		input.focus();
+		if (this.initialValue) input.select();
 		input.addEventListener("keydown", (evt) => {
 			if (evt.key === "Enter") this.submit(input.value);
 		});
 
 		const buttonRow = contentEl.createDiv({ attr: { style: "margin-top: 12px; text-align: right;" } });
-		const submitBtn = buttonRow.createEl("button", { text: "Create" });
+		const submitBtn = buttonRow.createEl("button", { text: this.submitLabel });
 		submitBtn.addEventListener("click", () => this.submit(input.value));
 	}
 
@@ -219,6 +232,67 @@ export function registerContextMenus(plugin: AethersWebPlugin): void {
 						}).open();
 					}),
 			);
+
+			menu.addItem((item) =>
+				item
+					.setTitle("Rename space")
+					.setIcon("pencil")
+					.onClick(() => {
+						// Renaming a folder never touches its own .aether/log.jsonl — that chain
+						// is keyed to the folder's *contents*, not its path, and nothing in this
+						// codebase re-initializes it on rename (only scaffoldSpace /
+						// ensureSpaceInitialized do that, and neither is called here or from the
+						// rename event handler in events.ts). fileManager.renameFile does the
+						// actual move; Obsidian's own "rename" event then fires exactly once,
+						// which events.ts's TFolder handler turns into a subspace_removed +
+						// subspace_created pair in the *parent's* log only — the space's own
+						// history, and its .aether/ folder, simply travel with it unchanged.
+						new NamePromptModal(
+							app,
+							"Rename space to",
+							async (name) => {
+								const parentPath = file.parent ? file.parent.path : "";
+								const newPath = normalizePath(parentPath ? `${parentPath}/${name}` : name);
+								try {
+									await app.fileManager.renameFile(file, newPath);
+									new Notice(`AethersWeb: renamed to ${newPath}`);
+								} catch (err) {
+									console.error("[AethersWeb] failed to rename space", err);
+									new Notice(`AethersWeb: failed to rename — ${(err as Error).message}`);
+								}
+							},
+							file.name,
+							"Rename",
+						).open();
+					}),
+			);
 		}),
 	);
+}
+
+/**
+ * Adds a ribbon icon that toggles the ".aether folders" inspector panel open/closed in the
+ * right sidebar. A CSS visibility toggle can't do this job: ".aether/" is a dotfolder, and
+ * Obsidian never indexes dotfolders into the vault tree at all (see aether-view.ts), so there
+ * are no File Explorer DOM nodes for it to reveal. This opens/closes a dedicated read-only view
+ * instead, built by reading .aether/ directly off the raw adapter.
+ */
+export function registerAetherViewToggle(plugin: AethersWebPlugin): void {
+	const { app } = plugin;
+
+	plugin.addRibbonIcon("eye", "AethersWeb: toggle .aether folders", async () => {
+		const existing = app.workspace.getLeavesOfType(AETHER_VIEW_TYPE);
+		if (existing.length > 0) {
+			for (const leaf of existing) leaf.detach();
+			return;
+		}
+
+		const leaf = app.workspace.getRightLeaf(false);
+		if (!leaf) {
+			new Notice("AethersWeb: couldn't open the .aether view — no right sidebar available");
+			return;
+		}
+		await leaf.setViewState({ type: AETHER_VIEW_TYPE, active: true });
+		await app.workspace.revealLeaf(leaf);
+	});
 }

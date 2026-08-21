@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { immediateFilesFs, immediateSubspacesFs, walkSpacesFs } from "../space-fs";
-import type { SpaceRefFs } from "../space-fs";
 import { readHeadFs } from "../vault-io";
+import { isUnderOrEqual } from "./helpers";
 
 export function registerListSpacesTool(server: McpServer, vaultRoot: string): void {
 	server.registerTool(
@@ -43,8 +43,4 @@ export function registerListSpacesTool(server: McpServer, vaultRoot: string): vo
 			return { content: [{ type: "text", text: JSON.stringify({ spaces }, null, 2) }] };
 		},
 	);
-}
-
-function isUnderOrEqual(ref: SpaceRefFs, under: string): boolean {
-	return ref.path === under || ref.path.startsWith(`${under}/`);
 }

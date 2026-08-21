@@ -4,6 +4,7 @@ import { StatementContainmentError } from "../../../src/core/statement";
 import { writeStatementFs } from "../context-fs";
 import { buildSpaceRefFs, isSpaceFs } from "../space-fs";
 import { readHeadFs } from "../vault-io";
+import { fail, notASpace, ok, SPACE_PATH_DESC } from "./helpers";
 
 /**
  * Not one of Spec.md's literal 5 tools, but Spec.md separately says the AI statement is "written
@@ -45,7 +46,7 @@ export function registerWriteStatementTool(server: McpServer, vaultRoot: string)
 				"content: an unresolved gap is itself something to report, not something to fill in or " +
 				"leave out.",
 			inputSchema: {
-				space_path: z.string().describe('Vault-relative path of the space, e.g. "UserSpace/Location".'),
+				space_path: z.string().describe(SPACE_PATH_DESC),
 				text: z.string().describe("The AI-generated state statement text to write."),
 				agent: z
 					.string()
@@ -65,12 +66,7 @@ export function registerWriteStatementTool(server: McpServer, vaultRoot: string)
 			},
 		},
 		async ({ space_path, text, agent, at_tip, expect_tip }) => {
-			if (!(await isSpaceFs(vaultRoot, space_path))) {
-				return {
-					content: [{ type: "text" as const, text: `"${space_path}" is not a claimed space (no .aether/log.jsonl found).` }],
-					isError: true,
-				};
-			}
+			if (!(await isSpaceFs(vaultRoot, space_path))) return notASpace(space_path);
 			const ref = buildSpaceRefFs(vaultRoot, space_path);
 			const currentHead = await readHeadFs(ref);
 
@@ -79,46 +75,31 @@ export function registerWriteStatementTool(server: McpServer, vaultRoot: string)
 			// written, marking as current a statement that never saw the changes it now claims to
 			// cover. Silent, and precisely inverted from the truth staleness exists to report.
 			if (expect_tip !== undefined && expect_tip !== currentHead) {
-				return {
-					content: [{
-						type: "text" as const,
-						text:
-							`Refusing to write: "${space_path}" has moved on since you read it ` +
-							`(expected ${expect_tip}, now ${currentHead}). Re-read the space and regenerate ` +
-							`the statement against its current state.`,
-					}],
-					isError: true,
-				};
+				return fail(
+					`Refusing to write: "${space_path}" has moved on since you read it ` +
+						`(expected ${expect_tip}, now ${currentHead}). Re-read the space and regenerate ` +
+						`the statement against its current state.`,
+				);
 			}
 
 			const atTip = at_tip ?? currentHead;
 			if (atTip === null) {
-				return {
-					content: [{ type: "text" as const, text: `Space "${space_path}" has no log entries yet — nothing to stamp statement_tip against.` }],
-					isError: true,
-				};
+				return fail(`Space "${space_path}" has no log entries yet — nothing to stamp statement_tip against.`);
 			}
 			try {
 				await writeStatementFs(ref, text, atTip, agent);
 			} catch (err) {
-				if (err instanceof StatementContainmentError) {
-					return { content: [{ type: "text" as const, text: err.message }], isError: true };
-				}
+				if (err instanceof StatementContainmentError) return fail(err.message);
 				throw err;
 			}
-			return {
-				content: [{
-					type: "text",
-					text: JSON.stringify({
-						ok: true,
-						statement_tip: atTip,
-						signed_by: agent,
-						verification:
-							"not required — a statement is derived from the log and regenerated with it, so " +
-							"it is not held for the user's confirmation. Do not ask them to go verify it.",
-					}, null, 2),
-				}],
-			};
+			return ok({
+				ok: true,
+				statement_tip: atTip,
+				signed_by: agent,
+				verification:
+					"not required — a statement is derived from the log and regenerated with it, so " +
+					"it is not held for the user's confirmation. Do not ask them to go verify it.",
+			});
 		},
 	);
 }

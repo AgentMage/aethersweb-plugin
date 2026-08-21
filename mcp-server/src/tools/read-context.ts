@@ -4,6 +4,7 @@ import { z } from "zod";
 import { signatureStatus } from "../../../src/core/signature";
 import { readSignedStatement } from "../../../src/core/statement";
 import { buildSpaceRefFs, isSpaceFs } from "../space-fs";
+import { fail, notASpace, ok, SPACE_PATH_DESC } from "./helpers";
 
 export function registerReadContextTool(server: McpServer, vaultRoot: string): void {
 	server.registerTool(
@@ -18,20 +19,18 @@ export function registerReadContextTool(server: McpServer, vaultRoot: string): v
 				"do not tell them to go confirm it. It is still not settled fact: check it against the " +
 				"log and the files, which are the authority, and say where it has drifted.",
 			inputSchema: {
-				space_path: z.string().describe('Vault-relative path of the space, e.g. "UserSpace/Location".'),
+				space_path: z.string().describe(SPACE_PATH_DESC),
 			},
 		},
 		async ({ space_path }) => {
-			if (!(await isSpaceFs(vaultRoot, space_path))) {
-				return errorResult(`"${space_path}" is not a claimed space (no .aether/log.jsonl found).`);
-			}
+			if (!(await isSpaceFs(vaultRoot, space_path))) return notASpace(space_path);
 			const ref = buildSpaceRefFs(vaultRoot, space_path);
 
 			let text: string;
 			try {
 				text = await readFile(ref.contextPath, "utf8");
 			} catch {
-				return errorResult(`No context note found at ${ref.contextPath} — try regenerate_context first.`);
+				return fail(`No context note found at ${ref.contextPath} — try regenerate_context first.`);
 			}
 
 			const fmMatch = text.match(/^---\n([\s\S]*?)\n---\n/);
@@ -40,21 +39,12 @@ export function registerReadContextTool(server: McpServer, vaultRoot: string): v
 			// The statement's prose and its signature are returned apart, so neither the signature
 			// comment nor its rendered line is mistaken for part of what the statement says.
 			const found = readSignedStatement(text);
-			return {
-				content: [{
-					type: "text",
-					text: JSON.stringify({
-						frontmatter_text,
-						statement_text: found?.text ?? "",
-						statement_signature: found?.signature ?? null,
-						statement_status: found ? signatureStatus(found.signature, found.text) : "unsigned",
-					}, null, 2),
-				}],
-			};
+			return ok({
+				frontmatter_text,
+				statement_text: found?.text ?? "",
+				statement_signature: found?.signature ?? null,
+				statement_status: found ? signatureStatus(found.signature, found.text) : "unsigned",
+			});
 		},
 	);
-}
-
-function errorResult(message: string) {
-	return { content: [{ type: "text" as const, text: message }], isError: true };
 }

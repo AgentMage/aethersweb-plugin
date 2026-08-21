@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { SpaceStaleness } from "../context-fs";
 import { checkStalenessFs } from "../context-fs";
 import { walkSpacesFs } from "../space-fs";
-import type { SpaceRefFs } from "../space-fs";
+import { isUnderOrEqual } from "./helpers";
 
 export function registerCheckStalenessTool(server: McpServer, vaultRoot: string): void {
 	server.registerTool(
@@ -37,8 +37,4 @@ export function registerCheckStalenessTool(server: McpServer, vaultRoot: string)
 			return { content: [{ type: "text", text: JSON.stringify({ spaces }, null, 2) }] };
 		},
 	);
-}
-
-function isUnderOrEqual(ref: SpaceRefFs, under: string): boolean {
-	return ref.path === under || ref.path.startsWith(`${under}/`);
 }

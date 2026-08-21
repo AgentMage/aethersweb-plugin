@@ -4,6 +4,7 @@ import type { SpinType } from "../../../src/core/types";
 import { regenerateContextFs } from "../context-fs";
 import { buildSpaceRefFs, isSpaceFs } from "../space-fs";
 import { appendSpinFs } from "../vault-io";
+import { fail, ok } from "./helpers";
 
 /**
  * What this tool may still write, now that real authoring tools exist.
@@ -52,20 +53,12 @@ export function registerAppendSpinTool(server: McpServer, vaultRoot: string): vo
 		},
 		async ({ space_path, spin_type, source, payload }) => {
 			if (!(await isSpaceFs(vaultRoot, space_path))) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `"${space_path}" is not a claimed space (no .aether/log.jsonl found) — space creation is plugin-only in v1.`,
-						},
-					],
-					isError: true,
-				};
+				return fail(`"${space_path}" is not a claimed space (no .aether/log.jsonl found) — space creation is plugin-only in v1.`);
 			}
 			const ref = buildSpaceRefFs(vaultRoot, space_path);
 			const spin = await appendSpinFs(ref, spin_type, source, payload);
 			await regenerateContextFs(vaultRoot, ref);
-			return { content: [{ type: "text", text: JSON.stringify({ spin }, null, 2) }] };
+			return ok({ spin });
 		},
 	);
 }

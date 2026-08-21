@@ -3,6 +3,7 @@ import { z } from "zod";
 import { planRegenerationFs } from "../context-fs";
 import { walkSpacesFs } from "../space-fs";
 import type { SpaceRefFs } from "../space-fs";
+import { isUnderOrEqual } from "./helpers";
 
 /**
  * The tree-aware counterpart to check_staleness: same underlying staleness check, but filtered to
@@ -53,8 +54,4 @@ export function registerPlanRegenerationTool(server: McpServer, vaultRoot: strin
 			return { content: [{ type: "text", text: JSON.stringify({ plan }, null, 2) }] };
 		},
 	);
-}
-
-function isUnderOrEqual(ref: SpaceRefFs, under: string): boolean {
-	return ref.path === under || ref.path.startsWith(`${under}/`);
 }

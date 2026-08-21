@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-This is an **Obsidian vault**, not a conventional software project — there is currently no build system, package manifest, linter, or test suite. The entire technical content right now is:
+This is the **plugin source code** for AethersWeb — a TypeScript/esbuild Obsidian plugin project (`src/`, `package.json`, `manifest.json`, `esbuild.config.mjs`). It is *not* itself an openable Obsidian vault.
 
-- `Spec.md` — the complete design specification for **AethersWeb**. Read it in full before making any structural change; it is written to be self-contained and is the single source of truth for how the system should behave.
-- `.aether/` — the vault-root maintainer state (`config.json`, `state.json`, `log.jsonl`), currently just scaffolding (empty log, null tip/statement).
-- `.obsidian/` — standard Obsidian vault config, with the third-party `folder-notes` community plugin installed (used for the folder-note convention referenced in the spec's layout).
+The core model below (spaces, logs, contexts, spins) is already implemented, not just a target: `src/bootstrap.ts` (space/subspace scaffolding), `src/log.ts` (hash-chained log I/O), `src/context.ts` (context-note regeneration), `src/reconcile.ts` (out-of-band edit detection), `src/events.ts` (live vault event capture), `src/commands.ts` / `src/settings.ts` (command palette, ribbon, folder context-menu, settings UI). See `README.md` for the file-by-file layout and what's explicitly out of scope for v0.1 (MCP server, real AI statement generation, checkpoint/log-pruning, multi-user).
 
-No AethersWeb plugin code or MCP server exists in this repo yet — the implementation described below is a target, not (yet) a reality. When asked to build it, treat `Spec.md` as the spec to implement against, and update it if a design decision changes during implementation.
+The real, openable test vault this plugin deploys into is the **sibling directory** `../AethersWeb` (`/home/lilly/AethersWeb`) — `npm run build` builds here and writes straight to `../AethersWeb/.obsidian/plugins/aethersweb/`. The plugin needs a manual reload in that vault (Settings → Community plugins → toggle off/on) after every build; building alone doesn't hot-reload it.
+
+**Known gap, not yet resolved:** both this repo and `../AethersWeb` are missing a `Spec.md` — the design spec this CLAUDE.md's "Core model" section below was originally derived from, and that `README.md` still points to at `../AethersWeb/Spec.md`. It isn't at that path or anywhere else found in either tree. Until it's re-created or the reference is corrected, treat the sections below (and the actual `src/` implementation) as the working source of truth, and flag this explicitly again if a future change seems to require the missing spec.
 
 ## Core model (from Spec.md)
 

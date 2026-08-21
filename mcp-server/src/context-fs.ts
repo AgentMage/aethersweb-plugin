@@ -1,11 +1,13 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { CONTEXT_SCHEMA_VERSION, DEFAULT_STATEMENT_PLACEHOLDER } from "../../src/core/constants";
+import { assessStatementDrift, spinsSinceTip } from "../../src/core/drift";
+import type { StatementDriftAssessment } from "../../src/core/drift";
 import { findStatementBlock, writeSignedStatement } from "../../src/core/statement";
 import { buildNoteText, extractStatementBlock, parseFrontmatter, renderBody, stringifyFrontmatter } from "../../src/core/context-format";
 import type { ContextFileEntry, ContextFrontmatter, ContextSubspaceEntry } from "../../src/core/types";
 import { hashFileFs, immediateFilesFs, immediateSubspacesFs, relativePathFs } from "./space-fs";
 import type { SpaceRefFs } from "./space-fs";
-import { readHeadFs } from "./vault-io";
+import { readHeadFs, readLogFs } from "./vault-io";
 
 async function readExistingStatementTip(contextPath: string): Promise<string | null> {
 	try {
@@ -122,8 +124,19 @@ export interface SpaceStaleness {
 	has_context_note: boolean;
 	/** source_tip (frontmatter) vs current_head — does regenerate_context need to run. */
 	frontmatter_stale: boolean;
-	/** statement_tip vs current_head — does write_statement need to run. Also true when no statement has ever been written. */
+	/**
+	 * statement_tip (frontmatter) vs current_head — the raw fact, not the policy. True the moment
+	 * a single spin has landed since the last statement, or when none has ever been written.
+	 */
 	statement_stale: boolean;
+	/**
+	 * Judgment on top of `statement_stale`: whether the spins recorded since the last statement are
+	 * worth spending a write_statement call on — see core/drift.ts. Null exactly when
+	 * `statement_stale` is false (nothing to judge). `planRegenerationFs`'s `needs_write_statement`
+	 * is driven by `statement_drift?.significant`, not by `statement_stale` alone — a space one
+	 * trivial edit behind is stale in fact but not yet worth a fresh statement.
+	 */
+	statement_drift: StatementDriftAssessment | null;
 	subspaces: SubspaceStaleness[];
 	/** frontmatter_stale || statement_stale || any subspace not "ok". */
 	stale: boolean;
@@ -136,8 +149,9 @@ export interface SpaceStaleness {
  * this space's own source_tip/statement_tip vs its actual head (readHeadFs), and — since a
  * subspace's own log never produces a parent log entry (chains are independent per space) —
  * each subspace tip recorded in this space's frontmatter vs that subspace's own actual current
- * head. Read-only: reports what's out of date, never fixes it (that's regenerate_context /
- * write_statement).
+ * head. Also judges `statement_drift` when the statement is stale, so a caller can tell "one
+ * trivial edit behind" apart from "worth a fresh write_statement" — see core/drift.ts. Read-only:
+ * reports what's out of date, never fixes it (that's regenerate_context / write_statement).
  */
 export async function checkStalenessFs(vaultRoot: string, ref: SpaceRefFs): Promise<SpaceStaleness> {
 	const current_head = await readHeadFs(ref);
@@ -155,7 +169,13 @@ export async function checkStalenessFs(vaultRoot: string, ref: SpaceRefFs): Prom
 	}
 
 	const frontmatter_stale = fm ? fm.source_tip !== current_head : true;
+	const recordedStatementTip = fm?.statement_tip ?? null;
 	const statement_stale = fm ? fm.statement_tip !== current_head : true;
+	// Only worth reading the log and judging drift when there's actually something to judge —
+	// most spaces most of the time are fully current, and the log read isn't free.
+	const statement_drift = statement_stale
+		? assessStatementDrift(spinsSinceTip(await readLogFs(ref), recordedStatementTip), recordedStatementTip !== null)
+		: null;
 	const subspaces = await diffSubspaces(vaultRoot, ref, fm?.subspaces ?? []);
 	const stale = frontmatter_stale || statement_stale || subspaces.some((s) => s.status !== "ok");
 
@@ -165,6 +185,7 @@ export async function checkStalenessFs(vaultRoot: string, ref: SpaceRefFs): Prom
 		has_context_note,
 		frontmatter_stale,
 		statement_stale,
+		statement_drift,
 		subspaces,
 		stale,
 		...(error ? { error } : {}),
@@ -209,7 +230,12 @@ export interface RegenerationPlanEntry {
 	depth: number;
 	/** true when regenerate_context needs to run: own frontmatter is stale, or a subspace tip drifted. */
 	needs_regenerate_context: boolean;
-	/** true when write_statement needs to run: statement_tip is behind current_head (or was never set). */
+	/**
+	 * true when write_statement is worth running: statement_tip is behind current_head *and* the
+	 * drift since then is significant (core/drift.ts) — a subspace appeared/vanished, no statement
+	 * exists yet, or enough spins piled up to cross the threshold. A space one trivial edit behind
+	 * its last statement is deliberately left out of the plan rather than flagged every time.
+	 */
 	needs_write_statement: boolean;
 	reasons: string[];
 }
@@ -228,24 +254,31 @@ export interface RegenerationPlanEntry {
  * statement is meant to place the space in the context of its universe and composition, which
  * reads better when the children it's reading about (via read_context / list_spaces) already carry
  * fresh statements rather than ones about to be rewritten anyway.
+ *
+ * "Actually need work" is judged, not just detected, on the statement side: a space whose only
+ * staleness is a statement a few trivial edits behind is left out of the plan entirely (see
+ * core/drift.ts) rather than appearing with `needs_write_statement: false` and no other reason to
+ * be here — the whole point of a threshold is spaces below it don't show up in the queue at all.
  */
 export async function planRegenerationFs(vaultRoot: string, refs: SpaceRefFs[]): Promise<RegenerationPlanEntry[]> {
 	const entries: RegenerationPlanEntry[] = [];
 	for (const ref of refs) {
 		const status = await checkStalenessFs(vaultRoot, ref);
-		if (!status.stale) continue;
-
 		const driftedSubspaces = status.subspaces.filter((s) => s.status !== "ok");
+		const needs_regenerate_context = status.frontmatter_stale || driftedSubspaces.length > 0;
+		const needs_write_statement = status.statement_stale && (status.statement_drift?.significant ?? false);
+		if (!needs_regenerate_context && !needs_write_statement) continue;
+
 		const reasons: string[] = [];
 		if (status.frontmatter_stale) reasons.push("source_tip behind current_head");
-		if (status.statement_stale) reasons.push("statement_tip behind current_head");
+		if (needs_write_statement) reasons.push(...(status.statement_drift?.reasons ?? []));
 		for (const s of driftedSubspaces) reasons.push(`subspace "${s.name}" ${s.status}`);
 
 		entries.push({
 			space_path: ref.path,
 			depth: ref.path.split("/").length,
-			needs_regenerate_context: status.frontmatter_stale || driftedSubspaces.length > 0,
-			needs_write_statement: status.statement_stale,
+			needs_regenerate_context,
+			needs_write_statement,
 			reasons,
 		});
 	}

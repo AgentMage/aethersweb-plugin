@@ -27,9 +27,15 @@ export function registerPlanRegenerationTool(server: McpServer, vaultRoot: strin
 				"places the space in the context of its universe and composition (see " +
 				"write_statement's description), which reads better once the children it's reading " +
 				"about already carry fresh statements rather than ones about to be rewritten anyway.\n\n" +
+				"needs_write_statement is a judgment, not just a tip mismatch: a space whose " +
+				"statement is only a handful of routine edits behind is left out of the plan " +
+				"entirely — the point of a threshold is that trivial drift never shows up here " +
+				"at all, so every space that does appear is worth the write_statement call. A " +
+				"subspace appearing or vanishing, or no statement ever having been written, " +
+				"always crosses it regardless of count.\n\n" +
 				"Walk the returned plan in order and, per entry, call regenerate_context when " +
 				"needs_regenerate_context is true and write_statement when needs_write_statement is " +
-				"true — `reasons` explains which tip(s) triggered it.",
+				"true — `reasons` explains what triggered each.",
 			inputSchema: {
 				under: z
 					.string()

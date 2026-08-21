@@ -15,7 +15,12 @@ export function registerCheckStalenessTool(server: McpServer, vaultRoot: string)
 				"recorded source_tip/statement_tip against its actual current log head, and each " +
 				"recorded subspace tip against that subspace's own actual current head, to report " +
 				"what needs regenerate_context or write_statement. Read-only — flags staleness, " +
-				"never fixes it.",
+				"never fixes it.\n\n" +
+				"statement_stale is the raw fact (does statement_tip differ from current_head at " +
+				"all); statement_drift is the judgment on top of it — whether the spins since the " +
+				"last statement are actually worth a write_statement call, or just a trivial edit or " +
+				"two not yet worth bothering anyone about. plan_regeneration is the tree-aware, " +
+				"drift-filtered counterpart if you want only the spaces that cross that bar.",
 			inputSchema: {
 				under: z
 					.string()

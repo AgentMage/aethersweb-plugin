@@ -18,10 +18,11 @@ function yamlScalar(v: string | number | null): string {
 }
 
 /**
- * Hand-rolled, deterministic YAML for the fixed context-note frontmatter shape — used by the
- * Obsidian plugin only when creating a brand-new note (updates to an existing note go through
- * Obsidian's own processFrontMatter instead — see context.ts), and by the MCP server for every
- * write, since it has no Obsidian YAML serializer to defer to.
+ * Hand-rolled, deterministic YAML for the fixed context-note frontmatter shape — used by both the
+ * Obsidian plugin (every write, not only a brand-new note — see context.ts) and the MCP server,
+ * which has no Obsidian YAML serializer to defer to anyway. Both sides writing this exact shape,
+ * rather than the plugin deferring to Obsidian's own frontmatter serializer for updates, is what
+ * keeps every context note parseable by parseFrontmatter regardless of which side last touched it.
  */
 export function stringifyFrontmatter(fm: ContextFrontmatter): string {
 	const lines: string[] = [];

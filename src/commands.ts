@@ -1,7 +1,7 @@
 import { App, Modal, normalizePath, Notice, TFolder } from "obsidian";
 import { AETHER_VIEW_TYPE } from "./aether-view";
 import { scaffoldSpace } from "./bootstrap";
-import { regenerateContext, reviewStatement, verifyStatement } from "./context";
+import { checkStatementDrift, regenerateContext, reviewStatement, verifyStatement } from "./context";
 import { verifyChain } from "./core/hash";
 import { readLog } from "./log";
 import { isStatementWritable } from "./core/statement";
@@ -288,6 +288,36 @@ export function registerCommands(plugin: AethersWebPlugin): void {
 			}
 			new Notice(`AethersWeb: ${pending.length} file(s) awaiting your confirmation — see console`);
 			console.info("[AethersWeb] AI content awaiting confirmation:\n" + pending.join("\n"));
+		},
+	});
+
+	// The plugin's hand-off surface for the statement queue: it never calls write_statement itself
+	// (per Spec.md, no LLM call happens outside an MCP client session), but this is where a person
+	// finds out which spaces are actually worth pointing an agent at, versus which are stale by a
+	// trivial edit or two and not worth bothering anyone about yet — see core/drift.ts.
+	plugin.addCommand({
+		id: "list-stale-statements",
+		name: "List spaces needing a fresh statement",
+		callback: async () => {
+			const threshold = plugin.settings.statementDriftThreshold;
+			const due: { path: string; drift: NonNullable<Awaited<ReturnType<typeof checkStatementDrift>>> }[] = [];
+			for await (const ref of walkSpaces(app)) {
+				const drift = await checkStatementDrift(ref, app, threshold);
+				if (drift?.significant) due.push({ path: ref.path, drift });
+			}
+			if (due.length === 0) {
+				new Notice("AethersWeb: no space's statement drift is significant right now");
+				return;
+			}
+			// Structural drift (a subspace appeared/vanished, or never written) first, then by how
+			// much has piled up — the same priority order plan_regeneration would put them in.
+			due.sort((a, b) => {
+				const structural = (b.drift.structuralChanges.length > 0 ? 1 : 0) - (a.drift.structuralChanges.length > 0 ? 1 : 0);
+				return structural !== 0 ? structural : b.drift.spinCount - a.drift.spinCount;
+			});
+			const lines = due.map((d) => `${d.path} — ${d.drift.reasons.join("; ")}`);
+			new Notice(`AethersWeb: ${due.length} space(s) worth a fresh statement — see console`, 8000);
+			console.info("[AethersWeb] spaces due for write_statement:\n" + lines.join("\n"));
 		},
 	});
 

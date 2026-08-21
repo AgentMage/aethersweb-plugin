@@ -1,5 +1,5 @@
 import type { TFile, TFolder } from "obsidian";
-import { DEFAULT_DEBOUNCE_MS, DEFAULT_RECONCILE_INTERVAL_MINUTES } from "./core/constants";
+import { DEFAULT_DEBOUNCE_MS, DEFAULT_RECONCILE_INTERVAL_MINUTES, STATEMENT_DRIFT_THRESHOLD } from "./core/constants";
 
 export * from "./core/types";
 
@@ -34,6 +34,12 @@ export interface AethersWebSettings {
 	 * stands behind it, so it is signed with who that was.
 	 */
 	verifierName: string;
+	/**
+	 * How many spins may accumulate since a space's last statement before "List spaces needing a
+	 * fresh statement" surfaces it on volume alone — see core/drift.ts. A subspace appearing or
+	 * vanishing, or a space with no statement at all, always surfaces regardless of this number.
+	 */
+	statementDriftThreshold: number;
 }
 
 export const DEFAULT_SETTINGS: AethersWebSettings = {
@@ -43,6 +49,7 @@ export const DEFAULT_SETTINGS: AethersWebSettings = {
 	autoClaimFolders: true,
 	reconcileIntervalMinutes: DEFAULT_RECONCILE_INTERVAL_MINUTES,
 	verifierName: "me",
+	statementDriftThreshold: STATEMENT_DRIFT_THRESHOLD,
 };
 
 /** Minimal shape used by fold/diff logic — a TFile is narrowed to just what's needed. */

@@ -63,6 +63,25 @@ export class AethersWebSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Statement drift threshold")
+			.setDesc(
+				"How many spins may accumulate since a space's last statement before \"List spaces " +
+					"needing a fresh statement\" surfaces it on volume alone. A subspace appearing or " +
+					"vanishing, or a space with no statement yet, always surfaces regardless of this number.",
+			)
+			.addText((text) =>
+				text
+					.setValue(String(this.plugin.settings.statementDriftThreshold))
+					.onChange(async (value) => {
+						const n = Number(value);
+						if (Number.isFinite(n) && n >= 1) {
+							this.plugin.settings.statementDriftThreshold = Math.round(n);
+							await this.plugin.saveSettings();
+						}
+					}),
+			);
+
+		new Setting(containerEl)
 			.setName("Claim unmanaged folders")
 			.setDesc(
 				"Scaffold folders found inside a space that were never claimed themselves. Without this, a folder created outside Obsidian (mkdir, a sync client, the MCP server) is invisible to both live capture and reconciliation — nothing inside it is ever recorded anywhere.",

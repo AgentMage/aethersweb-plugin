@@ -1,5 +1,7 @@
 import { App, TFile } from "obsidian";
 import { CONTEXT_SCHEMA_VERSION, DEFAULT_STATEMENT_PLACEHOLDER } from "./core/constants";
+import { assessStatementDrift, spinsSinceTip } from "./core/drift";
+import type { StatementDriftAssessment } from "./core/drift";
 import {
 	findStatementBlock,
 	readSignedStatement,
@@ -10,15 +12,15 @@ import {
 import { applyVerification, awaitsVerification, signatureStatus } from "./core/signature";
 import type { SignatureStatus, StatementSignature } from "./core/signature";
 import { buildNoteText, renderBody } from "./core/context-format";
-import { readHead } from "./log";
+import { readHead, readLog } from "./log";
 import { hashFile, immediateFiles, immediateSubspaces, relativePath } from "./space";
 import type { ContextFileEntry, ContextFrontmatter, ContextSubspaceEntry, SpaceRef } from "./types";
 
 /**
- * Serializes context regeneration per space. `processFrontMatter` is a read-modify-write on a
- * whole file; two of them interleaved on the same note (a debounced modify landing while a rename
- * regenerates, say) can lose one side's rebuild entirely. Unrelated spaces never wait on each
- * other.
+ * Serializes context regeneration per space. Regenerating is a read-modify-write on a whole file
+ * (read the current text, rebuild frontmatter, write the whole thing back); two of those
+ * interleaved on the same note (a debounced modify landing while a rename regenerates, say) can
+ * lose one side's rebuild entirely. Unrelated spaces never wait on each other.
  */
 const contextLocks = new Map<string, Promise<unknown>>();
 
@@ -102,13 +104,21 @@ async function regenerateContextLocked(ref: SpaceRef, app: App): Promise<void> {
 		return;
 	}
 
-	await app.fileManager.processFrontMatter(existingFile, (fm: Record<string, unknown>) => {
-		// full rebuild, not a patch — matches "objective content list regenerates on every change"
-		for (const key of Object.keys(fm)) delete fm[key];
-		Object.assign(fm, frontmatter);
-	});
-	// Body (including the statement block) is untouched: processFrontMatter only rewrites the
-	// YAML block. This is exactly why the sentinel-marker approach is safe.
+	// Full rebuild, not a patch — matches "objective content list regenerates on every change".
+	// Written as raw text via stringifyFrontmatter/buildNoteText (through app.vault.modify) rather
+	// than app.fileManager.processFrontMatter: processFrontMatter always re-serializes the *entire*
+	// frontmatter block from Obsidian's own object model, even to change one field, and Obsidian's
+	// YAML writer drops quotes around plain scalars (a bare `space_path` or `generated_at`) that
+	// core/context-format.ts's parseFrontmatter — deliberately a strict, non-general parser tied to
+	// stringifyFrontmatter's exact quoted shape — cannot read. The result was silent: every context
+	// note this plugin ever regenerated became unparseable to the MCP server's
+	// check_staleness/plan_regeneration/write_statement, exactly the cross-package drift
+	// core/context-format.ts being shared code is supposed to rule out. Body (including the
+	// statement block) is preserved untouched by slicing it straight out of the current text.
+	const currentText = await app.vault.read(existingFile);
+	const fmBlockMatch = currentText.match(/^---\n[\s\S]*?\n---\n/);
+	const body = fmBlockMatch ? currentText.slice(fmBlockMatch[0].length) : currentText;
+	await app.vault.modify(existingFile, buildNoteText(frontmatter, body));
 }
 
 /**
@@ -135,10 +145,44 @@ export async function writeStatement(
 	if (!findStatementBlock(current)) {
 		throw new Error(`[AethersWeb] statement markers not found in ${ref.contextPath}`);
 	}
-	await app.vault.modify(existing, writeSignedStatement(current, text, agent, atTip, ref.contextPath));
-	await app.fileManager.processFrontMatter(existing, (fm: Record<string, unknown>) => {
-		fm.statement_tip = atTip;
-	});
+	const withNewStatement = writeSignedStatement(current, text, agent, atTip, ref.contextPath);
+
+	// statement_tip lives inside the frontmatter block. Patched as raw text — mirroring the MCP
+	// server's writeStatementFs — rather than through processFrontMatter, which reformats every
+	// other field in the block via Obsidian's own (unquoted) YAML style and would silently make the
+	// note unparseable to the server's strict parseFrontmatter; see regenerateContextLocked's
+	// comment for the full story. Safe to patch independently of the body edit above: this line
+	// lives entirely outside the region that edit touched.
+	const tipLine = `statement_tip: ${JSON.stringify(atTip)}`;
+	const final = /^statement_tip:.*$/m.test(withNewStatement)
+		? withNewStatement.replace(/^statement_tip:.*$/m, tipLine)
+		: withNewStatement.replace(/^---\n([\s\S]*?)\n---\n/, (_whole, fm: string) => `---\n${fm}\n${tipLine}\n---\n`);
+
+	await app.vault.modify(existing, final);
+}
+
+/**
+ * The plugin-side counterpart to the MCP server's checkStalenessFs statement half: whether this
+ * space's statement is behind its current head at all, and if so, whether that drift is
+ * significant enough to be worth a write_statement call (core/drift.ts) — never on every keystroke.
+ *
+ * Returns null when there's nothing to judge: no spins yet, or the statement is already current.
+ * `threshold` is a parameter rather than baked in so callers can pass the user's own setting
+ * (`AethersWebSettings.statementDriftThreshold`) instead of the shared default.
+ */
+export async function checkStatementDrift(
+	ref: SpaceRef,
+	app: App,
+	threshold?: number,
+): Promise<StatementDriftAssessment | null> {
+	const head = await readHead(ref, app);
+	if (head === null) return null;
+
+	const statementTip = await readStatementTip(ref.contextPath, app);
+	if (statementTip === head) return null;
+
+	const log = await readLog(ref, app);
+	return assessStatementDrift(spinsSinceTip(log, statementTip), statementTip !== null, threshold);
 }
 
 export interface StatementReview {

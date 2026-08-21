@@ -67,6 +67,16 @@ export const DEFAULT_RECONCILE_INTERVAL_MINUTES = 15;
  */
 export const RENAME_ECHO_WINDOW_MS = 2000;
 
+/**
+ * Default number of spins that may accumulate since a space's last statement before the drift is
+ * treated as significant on volume alone — see core/drift.ts. Mirrors Spec.md's storage-discipline
+ * note that the AI statement is "debounced: on demand or past a threshold, never on every
+ * keystroke, or deep edits cascade model calls up the tree." Low enough that a space doesn't sit
+ * silently unaddressed for dozens of edits, high enough that a single saved keystroke doesn't
+ * queue an LLM call.
+ */
+export const STATEMENT_DRIFT_THRESHOLD = 5;
+
 /** Binary file extensions hashed via readBinary rather than cachedRead. */
 export const BINARY_EXTENSIONS = new Set([
 	"png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico",

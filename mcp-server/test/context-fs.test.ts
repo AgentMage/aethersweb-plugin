@@ -96,6 +96,27 @@ describe("context-fs.ts::checkStalenessFs", () => {
 		expect(status.frontmatter_stale).toBe(false);
 		expect(status.statement_stale).toBe(true);
 		expect(status.stale).toBe(true);
+		expect(status.statement_drift?.significant).toBe(true);
+		expect(status.statement_drift?.reasons).toEqual(["no statement has ever been written for this space"]);
+	});
+
+	it("statement_drift is null when the statement isn't stale, and reports low volume as not-yet-significant", async () => {
+		const ref = buildSpaceRefFs(vaultRoot, "UserSpace");
+		await appendSpinFs(ref, "space_created", "observed", {});
+		await regenerateContextFs(vaultRoot, ref);
+		const head = await readHeadFs(ref);
+		await writeStatementFs(ref, "Initial.", head!, "test-agent");
+
+		expect((await checkStalenessFs(vaultRoot, ref)).statement_drift).toBeNull();
+
+		// A couple of routine edits — well under the default threshold.
+		await appendSpinFs(ref, "file_created", "observed", { path: "a.md", content: "hi", content_hash: "x", encoding: "utf8" });
+		await appendSpinFs(ref, "file_created", "observed", { path: "b.md", content: "hi", content_hash: "x", encoding: "utf8" });
+
+		const status = await checkStalenessFs(vaultRoot, ref);
+		expect(status.statement_stale).toBe(true);
+		expect(status.statement_drift?.significant).toBe(false);
+		expect(status.statement_drift?.spinCount).toBe(2);
 	});
 
 	it("reports subspace drift when a child's log advances without the parent being regenerated", async () => {
@@ -213,5 +234,58 @@ describe("context-fs.ts::planRegenerationFs", () => {
 		expect(parent.needs_regenerate_context).toBe(true); // subspace drifted, though parent's own tips are fine
 		expect(parent.needs_write_statement).toBe(false); // parent's own statement_tip is still current
 		expect(parent.reasons).toEqual(['subspace "Sub" drifted']);
+	});
+
+	it("leaves a space out of the plan entirely when its only staleness is a statement below the drift threshold", async () => {
+		const ref = buildSpaceRefFs(vaultRoot, "UserSpace");
+		await appendSpinFs(ref, "space_created", "observed", {});
+		await regenerateContextFs(vaultRoot, ref);
+		const head = await readHeadFs(ref);
+		await writeStatementFs(ref, "All good.", head!, "test-agent");
+
+		// One routine edit, then frontmatter is regenerated (cheap, happens on every change) — the
+		// only thing left stale is the statement, and it's nowhere near the threshold.
+		await appendSpinFs(ref, "file_created", "observed", { path: "a.md", content: "hi", content_hash: "x", encoding: "utf8" });
+		await regenerateContextFs(vaultRoot, ref);
+
+		expect(await planRegenerationFs(vaultRoot, [ref])).toEqual([]);
+	});
+
+	it("includes a space once enough routine edits accumulate to cross the drift threshold", async () => {
+		const ref = buildSpaceRefFs(vaultRoot, "UserSpace");
+		await appendSpinFs(ref, "space_created", "observed", {});
+		await regenerateContextFs(vaultRoot, ref);
+		const head = await readHeadFs(ref);
+		await writeStatementFs(ref, "All good.", head!, "test-agent");
+
+		for (let i = 0; i < 5; i++) {
+			await appendSpinFs(ref, "file_created", "observed", { path: `f${i}.md`, content: "hi", content_hash: "x", encoding: "utf8" });
+		}
+		await regenerateContextFs(vaultRoot, ref);
+
+		const plan = await planRegenerationFs(vaultRoot, [ref]);
+		expect(plan).toHaveLength(1);
+		expect(plan[0].needs_write_statement).toBe(true);
+		expect(plan[0].needs_regenerate_context).toBe(false); // already regenerated above
+		expect(plan[0].reasons).toEqual(["5 spin(s) have accumulated since the last statement"]);
+	});
+
+	it("includes a space immediately on a structural change, even with a single spin since the last statement", async () => {
+		const parentRef = buildSpaceRefFs(vaultRoot, "UserSpace");
+		await appendSpinFs(parentRef, "space_created", "observed", {});
+		await regenerateContextFs(vaultRoot, parentRef);
+		const head = await readHeadFs(parentRef);
+		await writeStatementFs(parentRef, "Just me so far.", head!, "test-agent");
+
+		await mkdir(join(vaultRoot, "UserSpace", "Sub", ".aether"), { recursive: true });
+		const childRef = buildSpaceRefFs(vaultRoot, "UserSpace/Sub");
+		await appendSpinFs(childRef, "space_created", "observed", {});
+		await appendSpinFs(parentRef, "subspace_created", "observed", { subspace_name: "Sub" });
+		await regenerateContextFs(vaultRoot, parentRef);
+
+		const plan = await planRegenerationFs(vaultRoot, [parentRef]);
+		expect(plan).toHaveLength(1);
+		expect(plan[0].needs_write_statement).toBe(true);
+		expect(plan[0].reasons).toEqual(["composition changed since the last statement (subspace_created)"]);
 	});
 });

@@ -1,7 +1,7 @@
 import { App, Modal, normalizePath, Notice, TFolder } from "obsidian";
 import { AETHER_VIEW_TYPE } from "./aether-view";
 import { scaffoldSpace } from "./bootstrap";
-import { checkStatementDrift, regenerateContext, reviewStatement, verifyStatement } from "./context";
+import { checkStatementDrift, reviewStatement, verifyStatement } from "./context";
 import { verifyChain } from "./core/hash";
 import { readLog } from "./log";
 import { isStatementWritable } from "./core/statement";
@@ -116,21 +116,6 @@ class ConfirmModal extends Modal {
 
 export function registerCommands(plugin: AethersWebPlugin): void {
 	const { app } = plugin;
-
-	plugin.addCommand({
-		id: "regenerate-context-current",
-		name: "Regenerate context for current space",
-		callback: async () => {
-			const file = app.workspace.getActiveFile();
-			const ref = await findOwningSpace(file?.parent ?? null, app);
-			if (!ref) {
-				new Notice("AethersWeb: no active file inside a space");
-				return;
-			}
-			await regenerateContext(ref, app);
-			new Notice(`AethersWeb: regenerated context for ${ref.path}`);
-		},
-	});
 
 	plugin.addCommand({
 		id: "verify-chain-current",

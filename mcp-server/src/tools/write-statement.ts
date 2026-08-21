@@ -11,6 +11,16 @@ import { readHeadFs } from "../vault-io";
  * (already documented there as "the future drop-in point for the MCP server / statement
  * generator"). Deliberately bypasses the log entirely: a statement is a non-authoritative,
  * disposable annotation, not a replayable file event, so it has no business becoming a SpinType.
+ *
+ * The tool description below is deliberately operational only — what to read first, what a
+ * statement must contain, what it must not do — and deliberately carries none of CLAUDE.md's
+ * "What a space is" voice/tone doctrine. That's intentional: this description reaches every
+ * caller regardless of which agent or client is driving the server, so it shouldn't be the
+ * channel that sets personality. Tone stays wherever the calling agent's own instructions
+ * (CLAUDE.md, system prompt, etc.) come from. Since the two documents describe the same
+ * underlying behavior from different angles, they can drift: if CLAUDE.md's "What a space is"
+ * section changes in a way that changes what a statement must *contain* (not just how it should
+ * sound), check whether the operational content below still matches.
  */
 export function registerWriteStatementTool(server: McpServer, vaultRoot: string): void {
 	server.registerTool(
@@ -21,23 +31,19 @@ export function registerWriteStatementTool(server: McpServer, vaultRoot: string)
 				"Writes new AI-generated statement text into a space's context note (between the " +
 				"sentinel markers) and stamps statement_tip. Does not touch the objective frontmatter " +
 				"and does not append a spin — the statement is derived/disposable, not authoritative.\n\n" +
-				"Before generating: call read_context on this space, and don't stop there — read the " +
-				"parent's context and list_spaces around it (siblings, subspaces). A space is a real " +
-				"piece of someone's real life, not a record about it — see CLAUDE.md's \"What a space " +
-				"is\" for the full doctrine this description operationalizes.\n\n" +
-				"Every statement needs both halves, together, every time:\n" +
-				"- WHAT the space is — its own character, read from its files and history, grounded " +
-				"strictly in what the data supports. Nothing invented to fill a gap.\n" +
-				"- WHERE it is — its position among its parent, siblings, and subspaces. Never written " +
-				"as if it stood alone.\n\n" +
+				"Before generating: call read_context on this space, then read the parent's context " +
+				"and list_spaces around it (siblings, subspaces). Do not generate from this space's " +
+				"own context alone.\n\n" +
+				"Every statement needs both parts, together, every time:\n" +
+				"- WHAT the space is — grounded strictly in what its own files and history support. " +
+				"Do not invent content to fill a gap.\n" +
+				"- WHERE it is — its position among its parent, siblings, and subspaces. Do not write " +
+				"it as if the space stood alone.\n\n" +
 				"The frontmatter next to this text already carries the cold facts — file list, hashes, " +
-				"counts, diffs — so this is not a second copy of that report. But it isn't free-standing " +
-				"prose either: where the data is thin, silent, or drifted from what a sibling space " +
-				"already records, say so plainly instead of smoothing it into a finished-sounding " +
-				"sentence. The goal is verified clarity — handing the person back what the log and files " +
-				"actually establish about their own subjective universe, kept visibly separate from " +
-				"what's still open and worth them going to confirm themselves. A statement that resolves " +
-				"every gap instead of naming it has failed at this, no matter how well it reads.",
+				"counts, diffs — so do not restate that report. Where the data is thin, silent, or has " +
+				"drifted from what a sibling space already records, state that plainly as part of the " +
+				"content: an unresolved gap is itself something to report, not something to fill in or " +
+				"leave out.",
 			inputSchema: {
 				space_path: z.string().describe('Vault-relative path of the space, e.g. "UserSpace/Location".'),
 				text: z.string().describe("The AI-generated state statement text to write."),

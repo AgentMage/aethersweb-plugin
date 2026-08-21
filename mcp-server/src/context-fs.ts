@@ -250,10 +250,10 @@ export interface RegenerationPlanEntry {
  * Bottom-up order is *not* needed for correctness of regenerate_context itself: it always reads a
  * subspace's actual current head straight off disk (readHeadFs), never off that subspace's own
  * context note, so parent and child frontmatter can be regenerated in either order with the same
- * result. The ordering exists for write_statement instead — per that tool's tone brief, a parent's
- * statement is meant to place the space in the context of its universe and composition, which
- * reads better when the children it's reading about (via read_context / list_spaces) already carry
- * fresh statements rather than ones about to be rewritten anyway.
+ * result. The ordering exists for write_statement instead — per that tool's description, a parent's
+ * statement must place the space among its parent, siblings, and subspaces, which is more accurate
+ * when the children it's reading about (via read_context / list_spaces) already carry fresh
+ * statements rather than ones about to be rewritten anyway.
  *
  * "Actually need work" is judged, not just detected, on the statement side: a space whose only
  * staleness is a statement a few trivial edits behind is left out of the plan entirely (see

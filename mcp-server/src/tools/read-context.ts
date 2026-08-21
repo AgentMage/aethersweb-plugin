@@ -12,9 +12,11 @@ export function registerReadContextTool(server: McpServer, vaultRoot: string): v
 			title: "Read a space's context",
 			description:
 				"Reads a space's context note: the objective frontmatter content list as raw YAML, and " +
-				"the AI state statement's prose separated from its signature. statement_status says " +
-				"whether a person has verified the statement — unverified text is not settled fact, " +
-				"and only the user can change that, in Obsidian.",
+				"the AI state statement's prose separated from its signature. statement_status reports " +
+				"attribution, not approval: a statement is derived from the log and regenerated with " +
+				"it, so `unverified` is its normal state rather than something waiting on the user — " +
+				"do not tell them to go confirm it. It is still not settled fact: check it against the " +
+				"log and the files, which are the authority, and say where it has drifted.",
 			inputSchema: {
 				space_path: z.string().describe('Vault-relative path of the space, e.g. "UserSpace/Location".'),
 			},

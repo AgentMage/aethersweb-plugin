@@ -55,7 +55,9 @@ writers from silently drifting apart.
   block so human writing in the same file is never clobbered. Every AI write routes through here.
 - `signature.ts` — who wrote AI content, when, against what, and whether a person has confirmed it.
   Verification records the hash actually read, so editing the prose lapses approval automatically.
-  Writing a verification is plugin-only: an agent confirming its own output means nothing.
+  Writing a verification is plugin-only: an agent confirming its own output means nothing. Only
+  content outside a space's folder note is held for confirmation — `requiresVerification` in
+  `statement.ts` decides that, since a statement is derived from the log and regenerated with it.
 - `context-format.ts` — deterministic context-note serialization and its exact inverse.
 
 ### Plugin — `src/`

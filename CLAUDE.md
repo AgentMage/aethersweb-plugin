@@ -92,6 +92,11 @@ and verification. Route every AI write through them.
   identical to a person's and means nothing. The MCP server reads these fields and writes none of
   them — same reasoning as chain repair. Verification records the hash the person read, so editing
   the prose lapses it automatically.
+- **Confirmation is only asked for outside the folder note.** `requiresVerification` (`core/
+  statement.ts`) is the one place that decides it. An authored file is derived from nothing and
+  stays pending until a person stands behind it; a statement is rebuilt from the log whenever the
+  space moves on, so `unverified` is its normal state, not a task. Signed and attributed either way
+  — only the ask differs. Never prompt, list, or nag on a context note's statement.
 - Re-writing byte-identical prose is a no-op preserving signature and verification. Do not
   reintroduce a fresh timestamp per write: it defeats no-op suppression and silently discards
   approval.

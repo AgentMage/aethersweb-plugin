@@ -4,9 +4,10 @@ import {
 	findStatementBlock,
 	readSignedStatement,
 	replaceSignature,
+	requiresVerification,
 	writeSignedStatement,
 } from "./core/statement";
-import { applyVerification, signatureStatus } from "./core/signature";
+import { applyVerification, awaitsVerification, signatureStatus } from "./core/signature";
 import type { SignatureStatus, StatementSignature } from "./core/signature";
 import { buildNoteText, renderBody } from "./core/context-format";
 import { readHead } from "./log";
@@ -134,7 +135,7 @@ export async function writeStatement(
 	if (!findStatementBlock(current)) {
 		throw new Error(`[AethersWeb] statement markers not found in ${ref.contextPath}`);
 	}
-	await app.vault.modify(existing, writeSignedStatement(current, text, agent, atTip));
+	await app.vault.modify(existing, writeSignedStatement(current, text, agent, atTip, ref.contextPath));
 	await app.fileManager.processFrontMatter(existing, (fm: Record<string, unknown>) => {
 		fm.statement_tip = atTip;
 	});
@@ -144,15 +145,31 @@ export interface StatementReview {
 	status: SignatureStatus;
 	signature: StatementSignature | null;
 	text: string;
+	/** Whether this content is held for the person's confirmation — false in a context note. */
+	verificationRequired: boolean;
+	/** Whether it is actually waiting on them right now. Only this should ever prompt. */
+	awaitsPerson: boolean;
 }
 
-/** Reads a note's AI content and what its signature currently establishes about it. */
-export async function reviewStatement(contextPath: string, app: App): Promise<StatementReview | null> {
-	const file = app.vault.getAbstractFileByPath(contextPath);
+/**
+ * Reads a note's AI content and what its signature currently establishes about it. Works on any
+ * note, not only a context note — an agent-authored file carries the same block, and it is the one
+ * a person is actually asked to confirm.
+ */
+export async function reviewStatement(notePath: string, app: App): Promise<StatementReview | null> {
+	const file = app.vault.getAbstractFileByPath(notePath);
 	if (!(file instanceof TFile)) return null;
 	const found = readSignedStatement(await app.vault.read(file));
 	if (!found) return null;
-	return { status: signatureStatus(found.signature, found.text), signature: found.signature, text: found.text };
+	const status = signatureStatus(found.signature, found.text);
+	const verificationRequired = requiresVerification(notePath);
+	return {
+		status,
+		signature: found.signature,
+		text: found.text,
+		verificationRequired,
+		awaitsPerson: awaitsVerification(status, verificationRequired),
+	};
 }
 
 /**
@@ -165,16 +182,24 @@ export async function reviewStatement(contextPath: string, app: App): Promise<St
  * Only the signature is rewritten — not one character of the prose being confirmed changes, so what
  * the person read is exactly what the recorded hash covers.
  */
-export async function verifyStatement(contextPath: string, verifier: string, app: App): Promise<StatementReview | null> {
-	const file = app.vault.getAbstractFileByPath(contextPath);
+export async function verifyStatement(notePath: string, verifier: string, app: App): Promise<StatementReview | null> {
+	const file = app.vault.getAbstractFileByPath(notePath);
 	if (!(file instanceof TFile)) return null;
 	const current = await app.vault.read(file);
 	const found = readSignedStatement(current);
 	if (!found?.signature) return null;
 
 	const updated = applyVerification(found.signature, found.text, verifier);
-	const rewritten = replaceSignature(current, updated);
+	const rewritten = replaceSignature(current, updated, notePath);
 	if (rewritten === null) return null;
 	await app.vault.modify(file, rewritten);
-	return { status: signatureStatus(updated, found.text), signature: updated, text: found.text };
+	const status = signatureStatus(updated, found.text);
+	const verificationRequired = requiresVerification(notePath);
+	return {
+		status,
+		signature: updated,
+		text: found.text,
+		verificationRequired,
+		awaitsPerson: awaitsVerification(status, verificationRequired),
+	};
 }

@@ -110,7 +110,8 @@ export async function writeFileFs(
 	await mkdir(dirname(absPath), { recursive: true });
 	if (inline) {
 		const existing = created ? "" : await readFile(absPath, "utf8");
-		await writeFile(absPath, writeSignedStatement(existing, content, agent, null), "utf8");
+		const vaultPath = `${ref.path}/${relPath}`;
+		await writeFile(absPath, writeSignedStatement(existing, content, agent, null, vaultPath), "utf8");
 	} else {
 		await writeFile(absPath, encoding === "base64" ? Buffer.from(content, "base64") : content);
 	}

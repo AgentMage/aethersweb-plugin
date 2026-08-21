@@ -4,7 +4,8 @@ import { scaffoldSpace } from "./bootstrap";
 import { regenerateContext, reviewStatement, verifyStatement } from "./context";
 import { verifyChain } from "./core/hash";
 import { readLog } from "./log";
-import { findOwningSpace, isSpace, walkSpaces } from "./space";
+import { isStatementWritable } from "./core/statement";
+import { findOwningSpace, immediateFiles, isSpace, walkSpaces } from "./space";
 import type AethersWebPlugin from "./main";
 
 class NamePromptModal extends Modal {
@@ -68,7 +69,11 @@ function describeReview(noteName: string, review: import("./context").StatementR
 		case "stale_signature":
 			return `${noteName}: text was edited after ${sig.agent} signed it — the signature no longer covers it.`;
 		default:
-			return `${noteName}: written by ${sig.agent} on ${sig.written_at.slice(0, 10)}, not yet verified.`;
+			// Unconfirmed is reported either way; only a note that is actually waiting on the person
+			// is described as waiting on them.
+			return review.verificationRequired
+				? `${noteName}: written by ${sig.agent} on ${sig.written_at.slice(0, 10)}, not yet verified.`
+				: `${noteName}: written by ${sig.agent} on ${sig.written_at.slice(0, 10)} — derived from the space's log, not held for confirmation.`;
 	}
 }
 
@@ -237,11 +242,15 @@ export function registerCommands(plugin: AethersWebPlugin): void {
 			}
 			// Confirming is an act of standing behind particular words, so the user is shown the
 			// words before it happens rather than after.
+			const written = `It was written by ${review.signature.agent} on ${review.signature.written_at.slice(0, 10)}.`;
 			new ConfirmModal(
 				app,
 				"Verify AI content",
-				`You are confirming that you have read this and stand behind it. It was written by ` +
-					`${review.signature.agent} on ${review.signature.written_at.slice(0, 10)}.`,
+				review.verificationRequired
+					? `You are confirming that you have read this and stand behind it. ${written}`
+					: `This is a space statement — derived from the log and regenerated with it, so nothing ` +
+						`is waiting on you here. You can still record that you have read it and stand behind ` +
+						`it. ${written}`,
 				review.text,
 				async () => {
 					const verified = await verifyStatement(file.path, plugin.settings.verifierName, app);
@@ -255,23 +264,30 @@ export function registerCommands(plugin: AethersWebPlugin): void {
 		},
 	});
 
+	// Deliberately the *authored files*, not the context notes. A context note's statement is
+	// derived and regenerated with the log, so listing every unconfirmed one would hand the person
+	// a list as long as their vault, all of it noise, and bury the files that genuinely wait on
+	// them. `immediateFiles` already excludes a space's own context note.
 	plugin.addCommand({
 		id: "list-unverified-ai-content",
-		name: "List unverified AI content across the vault",
+		name: "List AI content awaiting your confirmation",
 		callback: async () => {
 			const pending: string[] = [];
 			for await (const ref of walkSpaces(app)) {
-				const review = await reviewStatement(ref.contextPath, app);
-				if (review && review.status !== "verified" && review.signature) {
-					pending.push(`${ref.path} — ${review.status}`);
+				for (const file of immediateFiles(ref)) {
+					if (!isStatementWritable(file.path)) continue;
+					const review = await reviewStatement(file.path, app);
+					if (review?.signature && review.awaitsPerson) {
+						pending.push(`${file.path} — ${review.status}`);
+					}
 				}
 			}
 			if (pending.length === 0) {
-				new Notice("AethersWeb: all signed AI content is verified");
+				new Notice("AethersWeb: nothing is waiting on you — every AI-authored file is confirmed");
 				return;
 			}
-			new Notice(`AethersWeb: ${pending.length} note(s) awaiting verification — see console`);
-			console.info("[AethersWeb] unverified AI content:\n" + pending.join("\n"));
+			new Notice(`AethersWeb: ${pending.length} file(s) awaiting your confirmation — see console`);
+			console.info("[AethersWeb] AI content awaiting confirmation:\n" + pending.join("\n"));
 		},
 	});
 

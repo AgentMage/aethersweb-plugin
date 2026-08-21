@@ -106,6 +106,11 @@ person sees exactly what would be quarantined before confirming.
   (`unsigned` / `unverified` / `verified` / `stale_signature` / `stale_verification`); treat
   anything other than `verified` as not settled, and say so rather than relying on it.
 
+Only a file you author through `write_file` is actually **held** for the person's confirmation. A
+statement is derived from the log and regenerated with it, so `unverified` is its ordinary state —
+report it, but never hand the user "go verify this statement" as a task. `stale_signature` on a
+statement means they edited the prose by hand: those words are theirs.
+
 Verification records the hash the person actually read, so editing the prose afterward lapses it
 automatically. Re-writing byte-identical prose is a no-op that preserves both signature and
 verification.

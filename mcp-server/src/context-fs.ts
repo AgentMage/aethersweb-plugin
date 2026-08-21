@@ -88,7 +88,7 @@ export async function writeStatementFs(ref: SpaceRefFs, text: string, atTip: str
 
 	// Body substitution first — scoped to the block, which lives below the frontmatter and so
 	// cannot touch it. Throws if the text carries the block's own markers; see core/statement.ts.
-	const withNewStatement = writeSignedStatement(current, text, agent, atTip);
+	const withNewStatement = writeSignedStatement(current, text, agent, atTip, ref.contextPath);
 
 	// statement_tip lives inside the frontmatter block, entirely outside the region just edited —
 	// safe to patch independently with a whole-text regex rather than re-parsing/reassembling

@@ -3,21 +3,29 @@ import { SIGNATURE_MARKER_PREFIX } from "../../src/core/constants";
 import { extractStatementBlock } from "../../src/core/context-format";
 import {
 	applyVerification,
+	awaitsVerification,
 	buildSignature,
 	hashStatementText,
 	parseSignatureMarker,
 	signatureStatus,
 } from "../../src/core/signature";
 import {
+	isContextNotePath,
 	readSignedStatement,
 	replaceSignature,
+	requiresVerification,
 	StatementContainmentError,
 	wrapInStatementBlock,
 	writeSignedStatement,
 } from "../../src/core/statement";
 
-const sign = (doc: string, text: string, agent = "claude-opus-5") =>
-	writeSignedStatement(doc, text, agent, "tip-abc");
+/** An agent-authored file: content nobody derived, so it is held for the person. */
+const AUTHORED = "Lilly/Trinidad/GPS.md";
+/** A space's own folder note, where the statement lives. */
+const CONTEXT = "Lilly/Trinidad/Trinidad.md";
+
+const sign = (doc: string, text: string, agent = "claude-opus-5", path = AUTHORED) =>
+	writeSignedStatement(doc, text, agent, "tip-abc", path);
 
 describe("signing", () => {
 	it("attributes content and leaves it unverified", () => {
@@ -52,7 +60,7 @@ describe("verification", () => {
 		const found = readSignedStatement(doc)!;
 
 		const verified = applyVerification(found.signature!, found.text, "lilly");
-		const after = replaceSignature(doc, verified)!;
+		const after = replaceSignature(doc, verified, AUTHORED)!;
 		const reread = readSignedStatement(after)!;
 
 		expect(signatureStatus(reread.signature, reread.text)).toBe("verified");
@@ -63,7 +71,7 @@ describe("verification", () => {
 	it("does not alter one character of what it confirms", () => {
 		const doc = sign("", "Exact words.");
 		const found = readSignedStatement(doc)!;
-		const after = replaceSignature(doc, applyVerification(found.signature!, found.text, "lilly"))!;
+		const after = replaceSignature(doc, applyVerification(found.signature!, found.text, "lilly"), AUTHORED)!;
 
 		expect(readSignedStatement(after)?.text).toBe(found.text);
 	});
@@ -103,9 +111,9 @@ describe("re-signing identical prose", () => {
 	it("preserves a person's verification — they approved these exact words", () => {
 		const doc = sign("", "Unchanged prose.");
 		const found = readSignedStatement(doc)!;
-		const verified = replaceSignature(doc, applyVerification(found.signature!, found.text, "lilly"))!;
+		const verified = replaceSignature(doc, applyVerification(found.signature!, found.text, "lilly"), AUTHORED)!;
 
-		const rewritten = writeSignedStatement(verified, "Unchanged prose.", "claude-opus-5", "tip-xyz");
+		const rewritten = writeSignedStatement(verified, "Unchanged prose.", "claude-opus-5", "tip-xyz", AUTHORED);
 		const after = readSignedStatement(rewritten)!;
 		expect(signatureStatus(after.signature, after.text)).toBe("verified");
 		expect(after.signature?.verified?.by).toBe("lilly");
@@ -114,7 +122,7 @@ describe("re-signing identical prose", () => {
 	it("drops verification when the prose actually changes", () => {
 		const doc = sign("", "First wording.");
 		const found = readSignedStatement(doc)!;
-		const verified = replaceSignature(doc, applyVerification(found.signature!, found.text, "lilly"))!;
+		const verified = replaceSignature(doc, applyVerification(found.signature!, found.text, "lilly"), AUTHORED)!;
 
 		const rewritten = sign(verified, "Second wording.");
 		const after = readSignedStatement(rewritten)!;
@@ -133,6 +141,56 @@ describe("forgery", () => {
 	it("ignores a malformed signature rather than trusting it", () => {
 		const doc = `${SIGNATURE_MARKER_PREFIX}not json -->`;
 		expect(parseSignatureMarker(doc)).toBe(null);
+	});
+});
+
+describe("who is actually asked to confirm", () => {
+	it("recognizes a space's folder note by its name, wherever the space sits", () => {
+		expect(isContextNotePath(CONTEXT)).toBe(true);
+		expect(isContextNotePath("Trinidad/Trinidad.md")).toBe(true);
+		expect(isContextNotePath(AUTHORED)).toBe(false);
+		expect(isContextNotePath("Lilly/Trinidad/Trinidad.txt")).toBe(false);
+		// The vault root is never a space, so a note sitting directly in it is nobody's folder note.
+		expect(isContextNotePath("Trinidad.md")).toBe(false);
+	});
+
+	it("holds authored files for the person and leaves statements alone", () => {
+		expect(requiresVerification(AUTHORED)).toBe(true);
+		expect(requiresVerification(CONTEXT)).toBe(false);
+	});
+
+	// The visible line is where a person meets this, so it is where the difference has to land.
+	it("asks for confirmation in an authored file", () => {
+		expect(sign("", "Some prose.")).toContain("Not yet verified");
+	});
+
+	it("does not ask for it in a statement, while still saying a machine wrote it", () => {
+		const doc = sign("", "Some prose.", "claude-opus-5", CONTEXT);
+		expect(doc).toContain("AI-written by `claude-opus-5`");
+		expect(doc).not.toContain("Not yet verified");
+		expect(doc).toContain("not held for your confirmation");
+	});
+
+	it("counts only content that is genuinely waiting on someone", () => {
+		expect(awaitsVerification("unverified", true)).toBe(true);
+		expect(awaitsVerification("stale_verification", true)).toBe(true);
+		expect(awaitsVerification("unverified", false)).toBe(false);
+		expect(awaitsVerification("stale_verification", false)).toBe(false);
+		// A person edited AI prose. Their words now — nothing to hand back to them.
+		expect(awaitsVerification("stale_signature", true)).toBe(false);
+		expect(awaitsVerification("verified", true)).toBe(false);
+	});
+
+	// Not required is not forbidden: someone who chooses to stand behind a statement is recorded
+	// exactly like anyone else. Nothing asks them to.
+	it("still records a person's confirmation of a statement if they give one", () => {
+		const doc = sign("", "A statement about Trinidad.", "claude-opus-5", CONTEXT);
+		const found = readSignedStatement(doc)!;
+		const after = replaceSignature(doc, applyVerification(found.signature!, found.text, "lilly"), CONTEXT)!;
+		const reread = readSignedStatement(after)!;
+
+		expect(signatureStatus(reread.signature, reread.text)).toBe("verified");
+		expect(after).toContain("Verified by lilly");
 	});
 });
 

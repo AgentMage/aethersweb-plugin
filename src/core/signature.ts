@@ -84,8 +84,17 @@ export function parseSignatureMarker(blockInner: string): StatementSignature | n
  * It is visible on purpose. A signature nobody encounters while reading the note is provenance in
  * name only; the person has to be able to see, without going looking, that a machine wrote this
  * and whether they ever confirmed it.
+ *
+ * `verificationRequired` changes only what the line *asks of the reader*, never what it reports:
+ * unconfirmed content is described as unconfirmed either way. It defaults to true so that content
+ * whose placement is unknown is treated as content someone has to stand behind — see
+ * `requiresVerification` in `statement.ts`, which is the one place that decides this.
  */
-export function renderSignatureFooter(sig: StatementSignature, status: SignatureStatus): string {
+export function renderSignatureFooter(
+	sig: StatementSignature,
+	status: SignatureStatus,
+	verificationRequired = true,
+): string {
 	const written = sig.written_at.slice(0, 10);
 	const head = `*— AI-written by \`${sig.agent}\`, ${written}.`;
 
@@ -97,8 +106,23 @@ export function renderSignatureFooter(sig: StatementSignature, status: Signature
 		case "stale_signature":
 			return `${head} Text edited after signing — this signature no longer covers it.*`;
 		default:
-			return `${head} **Not yet verified** — review it and confirm in Obsidian.*`;
+			return verificationRequired
+				? `${head} **Not yet verified** — review it and confirm in Obsidian.*`
+				: `${head} Derived from this space’s log and regenerated with it — not held for your confirmation.*`;
 	}
+}
+
+/**
+ * Whether signed content is actually waiting on the person — the question every "what still needs
+ * me?" surface asks, and the only one that should drive a prompt.
+ *
+ * Where verification isn't required, nothing is pending: a statement nobody has confirmed is in its
+ * normal state, and one whose confirmation lapsed because the log moved on is the system working as
+ * intended rather than a task. `stale_signature` is never pending either — it says a person edited
+ * AI prose, which is their own writing in an ill-fitting wrapper, not something to confirm.
+ */
+export function awaitsVerification(status: SignatureStatus, verificationRequired: boolean): boolean {
+	return verificationRequired && (status === "unverified" || status === "stale_verification");
 }
 
 /**

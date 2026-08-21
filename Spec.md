@@ -173,6 +173,19 @@ nothing the person approved has changed.
 Status is always recomputed from hashes, never read off the visible line: `unsigned`, `unverified`,
 `verified`, `stale_signature` (edited after signing), `stale_verification` (edited after approval).
 
+**Confirmation is asked for outside the context note only.** An authored file is not derived from
+anything — nothing regenerates it, nothing else in the vault says what it should contain, and the
+person will read it back later as part of their own notes. A machine wrote that into their world,
+and it stays pending until they say they stand behind it. A statement is the opposite case on every
+count: the context note is derived and disposable, rebuilt from the log whenever the space moves on,
+and a statement that drifts is corrected by regenerating it rather than by someone having certified
+an earlier version. It is still contained, still signed, still visibly attributed — it is simply not
+held for approval, and `unverified` is where it normally sits rather than a task waiting on anyone.
+Spending a person's attention on the one artifact the system rewrites on its own is attention not
+spent on the file where their confirmation is the only record there will ever be. Not required is
+not forbidden: a person can still verify a statement, and it is recorded like any other. Nothing
+asks them to.
+
 **Verification is plugin-only, and that is the substance of the feature rather than a restriction
 around it.** An agent confirming its own output produces a record indistinguishable from a person's
 and worth nothing. The MCP server can read every field and write none of them — the same reasoning

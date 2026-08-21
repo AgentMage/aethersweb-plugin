@@ -42,8 +42,11 @@ export function registerDescribeSpaceTool(server: McpServer, vaultRoot: string):
 				"rather than that they exist.\n\n" +
 				"statement_status reports the AI content's attribution: unsigned, unverified, verified, " +
 				"stale_signature (edited after signing), or stale_verification (edited after a person " +
-				"confirmed it). Anything other than verified is for the user to resolve in Obsidian, " +
-				"not for you — say so rather than treating unverified text as settled.",
+				"confirmed it). A statement is derived from the log and regenerated with it, so it is " +
+				"not held for the user's confirmation — `unverified` is its ordinary state, not a task " +
+				"to hand them. Never treat an unverified statement as settled either: the log and the " +
+				"files are the authority, and `stale_signature` means a person edited the prose, so " +
+				"those words are theirs and not yours to overwrite silently.",
 			inputSchema: {
 				space_path: z.string().describe(SPACE_PATH_DESC),
 			},
@@ -114,9 +117,11 @@ export function registerDescribeSpaceTool(server: McpServer, vaultRoot: string):
 				subspaces,
 				files,
 				statement_text,
-				// Who wrote the statement, and whether a person has confirmed it. "unverified" and
-				// "stale_verification" are the states worth surfacing to the user — only they can
-				// resolve either, and only in Obsidian.
+				// Who wrote the statement, and whether a person has confirmed it — reported, not
+				// escalated. A statement is regenerated with the log, so "unverified" is where it
+				// normally sits; the states that mean something here are "verified" (someone chose to
+				// stand behind it anyway) and "stale_signature" (someone edited the prose by hand).
+				// Content a person is actually asked to confirm lives in authored files, not here.
 				statement_signature,
 				statement_status,
 				staleness,

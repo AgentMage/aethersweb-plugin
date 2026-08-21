@@ -40,9 +40,10 @@ export function registerWriteFileTool(server: McpServer, vaultRoot: string): voi
 				"never skipped, only relocated.\n\n" +
 				"Text containing a statement or signature marker verbatim is refused: it would break " +
 				"out of its own block or forge its signature. Refer to markers descriptively.\n\n" +
-				"The signature records that an agent wrote this and stands unverified until a person " +
-				"confirms it in Obsidian. You cannot verify your own output — that is the point of the " +
-				"record.\n\n" +
+				"The signature records that an agent wrote this, and unlike a space statement — which is " +
+				"derived from the log and regenerated with it — an authored file is held for the " +
+				"person: it stands unverified until they confirm it in Obsidian. You cannot verify " +
+				"your own output; that is the point of the record.\n\n" +
 				"Returns spin: null when the resulting file is byte-identical to what the log already " +
 				"holds. The path is relative to the space and may not reach into a subspace.",
 			inputSchema: {

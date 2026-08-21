@@ -64,9 +64,9 @@ export function assertContainable(text: string): void {
  * `sig` is omitted only for the unwritten-yet placeholder a fresh context note carries — there is
  * no author to attribute and nothing for a person to verify. All actual AI content is signed.
  */
-export function wrapInStatementBlock(text: string, sig?: StatementSignature): string {
+export function wrapInStatementBlock(text: string, sig?: StatementSignature, path = ""): string {
 	assertContainable(text);
-	const body = sig ? `${text.trim()}\n\n${renderSignature(sig, text)}` : text.trim();
+	const body = sig ? `${text.trim()}\n\n${renderSignature(sig, text, path)}` : text.trim();
 	return `${STATEMENT_START_MARKER}\n${body}\n${STATEMENT_END_MARKER}\n`;
 }
 
@@ -81,9 +81,16 @@ export function wrapPreservedBlockBody(inner: string): string {
 	return `${STATEMENT_START_MARKER}\n${inner.trim()}\n${STATEMENT_END_MARKER}\n`;
 }
 
-/** The signature comment plus the visible line rendered from it, always emitted as a pair. */
-function renderSignature(sig: StatementSignature, text: string): string {
-	return `${renderSignatureMarker(sig)}\n${renderSignatureFooter(sig, signatureStatus(sig, text))}`;
+/**
+ * The signature comment plus the visible line rendered from it, always emitted as a pair.
+ *
+ * `path` is here only for the visible line: what it asks of the reader depends on where the content
+ * sits (see `requiresVerification`). The marker itself is path-independent — a signature says who
+ * wrote what, and moving a file does not change that.
+ */
+function renderSignature(sig: StatementSignature, text: string, path: string): string {
+	const footer = renderSignatureFooter(sig, signatureStatus(sig, text), requiresVerification(path));
+	return `${renderSignatureMarker(sig)}\n${footer}`;
 }
 
 /** Locates the first statement block in a document, or null when it has none. */
@@ -107,13 +114,18 @@ export function findStatementBlock(
  * reachable from here. A document with no block yet gets one appended rather than being taken
  * over: existing text is presumed human until something says otherwise.
  */
-export function replaceStatementBlock(noteText: string, text: string, sig?: StatementSignature): string {
+export function replaceStatementBlock(
+	noteText: string,
+	text: string,
+	sig?: StatementSignature,
+	path = "",
+): string {
 	assertContainable(text);
-	const inner = sig ? `${text.trim()}\n\n${renderSignature(sig, text)}` : text.trim();
+	const inner = sig ? `${text.trim()}\n\n${renderSignature(sig, text, path)}` : text.trim();
 	const block = findStatementBlock(noteText);
 	if (!block) {
 		const separator = noteText.length === 0 || noteText.endsWith("\n") ? "" : "\n";
-		return `${noteText}${separator}${noteText.length > 0 ? "\n" : ""}${wrapInStatementBlock(text, sig)}`;
+		return `${noteText}${separator}${noteText.length > 0 ? "\n" : ""}${wrapInStatementBlock(text, sig, path)}`;
 	}
 	return `${noteText.slice(0, block.innerStart)}\n${inner}\n${noteText.slice(block.innerEnd)}`;
 }
@@ -138,13 +150,14 @@ export function writeSignedStatement(
 	text: string,
 	agent: string,
 	atTip: string | null,
+	path: string,
 ): string {
 	assertContainable(text);
 	const existing = readSignedStatement(noteText);
 	if (existing?.signature && hashStatementText(existing.text) === hashStatementText(text)) {
 		return noteText;
 	}
-	return replaceStatementBlock(noteText, text, buildSignature(text, agent, atTip));
+	return replaceStatementBlock(noteText, text, buildSignature(text, agent, atTip), path);
 }
 
 /**
@@ -171,10 +184,10 @@ export function readSignedStatement(noteText: string): { text: string; signature
  * Re-writes a document's block with an updated signature, leaving the prose exactly as it is.
  * Used by verification, which must never touch a single character of what it is confirming.
  */
-export function replaceSignature(noteText: string, sig: StatementSignature): string | null {
+export function replaceSignature(noteText: string, sig: StatementSignature, path: string): string | null {
 	const existing = readSignedStatement(noteText);
 	if (!existing) return null;
-	return replaceStatementBlock(noteText, existing.text, sig);
+	return replaceStatementBlock(noteText, existing.text, sig, path);
 }
 
 /**
@@ -195,3 +208,41 @@ export function isStatementWritable(path: string): boolean {
 }
 
 export const STATEMENT_WRITABLE_HINT = "markdown or plain text (.md, .markdown, .txt, or no extension)";
+
+/**
+ * Whether a path is a space's own context note — the folder note `<Space>/<Space>.md`.
+ *
+ * Structural rather than a lookup, because the filename convention *is* the identity: that is the
+ * same thing `buildSpaceRef` computes, and it holds for a space whose folder has been moved,
+ * renamed, or handed to another vault. A note directly at the vault root can never match, since the
+ * root is never a space.
+ */
+export function isContextNotePath(path: string): boolean {
+	const segments = path.split("/").filter((s) => s.length > 0);
+	if (segments.length < 2) return false;
+	return segments[segments.length - 1] === `${segments[segments.length - 2]}.md`;
+}
+
+/**
+ * Whether AI content at this path is held for a person's confirmation.
+ *
+ * Everywhere except a space's context note, it is. An authored file is not derived from anything:
+ * nothing regenerates it, nothing else in the vault says what it should contain, and the person
+ * will read it back a year later as part of their own notes. That is content a machine wrote into
+ * someone's world, and it stays pending until they say they stand behind it.
+ *
+ * A statement in a context note is the opposite case on every count. The note is derived and
+ * disposable, rebuilt from the log whenever the space moves on; the log beside it is the authority
+ * on what actually happened, so a statement that drifts is corrected by regenerating it, not by
+ * someone having certified an earlier version. It is still contained, still signed, still visibly
+ * attributed — it is simply not asked for. Demanding a signature on the one artifact the system
+ * rewrites on its own would spend the person's attention where it changes nothing, and attention
+ * spent on that is attention not spent on the file where a confirmation is the only record there
+ * will ever be.
+ *
+ * Not required is not forbidden: a person can still verify a statement, and that verification is
+ * recorded exactly like any other. Nothing asks them to.
+ */
+export function requiresVerification(path: string): boolean {
+	return !isContextNotePath(path);
+}

@@ -1,4 +1,4 @@
-import { TFile, TFolder } from "obsidian";
+import { normalizePath, TFile, TFolder } from "obsidian";
 import { regenerateContext } from "./context";
 import { appendSpin, ensureSpaceInitialized } from "./log";
 import { isSpaceEnabled } from "./settings";
@@ -134,6 +134,25 @@ export function registerVaultEventHandlers(plugin: AethersWebPlugin): void {
 				if (!(await isSpace(file, app))) return; // plain folder move, not a space boundary event
 				const oldParentPath = parentPathOf(oldPath);
 				const oldName = oldPath.split("/").pop() ?? file.name;
+
+				if (oldName !== file.name) {
+					// Obsidian never renames a folder's children when the folder itself is
+					// renamed — the context note stays on disk under its old filename. Left
+					// alone, that orphan looks like ordinary new content to reconciliation
+					// (or to a fresh regenerateContext call finding no file at the new expected
+					// path), which spuriously advances this space's own chain just to create a
+					// replacement note under the new name. Rename it in place instead, and
+					// refresh its frontmatter (space_path) to match — neither step appends a
+					// spin, so the space's own head is untouched either way.
+					const ref = buildSpaceRef(file);
+					const oldNotePath = normalizePath(`${file.path}/${oldName}.md`);
+					const oldNote = app.vault.getAbstractFileByPath(oldNotePath);
+					if (oldNote instanceof TFile) {
+						await app.fileManager.renameFile(oldNote, ref.contextPath);
+					}
+					await regenerateContext(ref, app);
+				}
+
 				const oldParentFolder = oldParentPath
 					? app.vault.getAbstractFileByPath(oldParentPath)
 					: app.vault.getRoot();

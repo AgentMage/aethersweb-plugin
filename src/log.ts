@@ -3,6 +3,28 @@ import { buildNextSpin } from "./hash";
 import type { SpaceRef, Spin, SpinPayload, SpinSource, SpinType } from "./types";
 
 /**
+ * Serializes access to a single space's log by its log path. Without this, two spins racing
+ * against the same log (e.g. a debounced modify timer firing while a rename handler is also
+ * appending) can both read the same tail, both compute the same next seq, and both write —
+ * producing duplicate seq numbers and a broken hash chain. Keyed per log path, so unrelated
+ * spaces never wait on each other.
+ */
+const logLocks = new Map<string, Promise<unknown>>();
+
+function withLogLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+	const prior = logLocks.get(key) ?? Promise.resolve();
+	const run = prior.then(fn, fn);
+	// Swallow the result/error here so a failed append never poisons the chain for the next
+	// caller waiting on this key — each caller still sees its own `run`'s real outcome via the
+	// returned promise.
+	logLocks.set(key, run.then(
+		() => undefined,
+		() => undefined,
+	));
+	return run;
+}
+
+/**
  * All .aether/* I/O goes through the raw filesystem adapter (app.vault.adapter), never the
  * indexed vault file API (app.vault.create/modify/read) — Obsidian does not track dotfolders,
  * so .aether/ files never appear as TFile objects.
@@ -50,19 +72,21 @@ export async function appendSpin(
 	payload: SpinPayload,
 	app: App,
 ): Promise<Spin> {
-	const log = await readLog(ref, app);
-	const prevSpin = log.length > 0 ? log[log.length - 1] : null;
-	const nextSeq = prevSpin ? prevSpin.seq + 1 : 0;
-	const spin = buildNextSpin(prevSpin, nextSeq, spin_type, source, payload);
-	const line = JSON.stringify(spin) + "\n";
+	return withLogLock(ref.logPath, async () => {
+		const log = await readLog(ref, app);
+		const prevSpin = log.length > 0 ? log[log.length - 1] : null;
+		const nextSeq = prevSpin ? prevSpin.seq + 1 : 0;
+		const spin = buildNextSpin(prevSpin, nextSeq, spin_type, source, payload);
+		const line = JSON.stringify(spin) + "\n";
 
-	if (await app.vault.adapter.exists(ref.logPath)) {
-		await app.vault.adapter.append(ref.logPath, line);
-	} else {
-		await app.vault.adapter.write(ref.logPath, line);
-	}
-	await writeHead(ref, spin.hash, app);
-	return spin;
+		if (await app.vault.adapter.exists(ref.logPath)) {
+			await app.vault.adapter.append(ref.logPath, line);
+		} else {
+			await app.vault.adapter.write(ref.logPath, line);
+		}
+		await writeHead(ref, spin.hash, app);
+		return spin;
+	});
 }
 
 /**

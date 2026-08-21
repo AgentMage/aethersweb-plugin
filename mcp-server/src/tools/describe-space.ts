@@ -1,0 +1,126 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { readFile } from "node:fs/promises";
+import { z } from "zod";
+import { signatureStatus } from "../../../src/core/signature";
+import { readSignedStatement } from "../../../src/core/statement";
+import { checkStalenessFs } from "../context-fs";
+import {
+	buildSpaceRefFs,
+	hashFileFs,
+	immediateFilesFs,
+	immediateSubspacesFs,
+	isSpaceFs,
+	relativePathFs,
+} from "../space-fs";
+import { readHeadFs } from "../vault-io";
+import { notASpace, ok, SPACE_PATH_DESC } from "./helpers";
+
+/**
+ * One call that answers both halves of what a statement has to say: **what** a space is, and
+ * **where** it sits.
+ *
+ * The tool surface used to make the second half expensive. `read_context` returned one space's
+ * note; `list_spaces` returned a flat array of path strings. An agent asked to place a space among
+ * its parent, siblings and subspaces had to reconstruct the tree by splitting paths, then issue a
+ * call per neighbour — so the cheapest thing to do was describe the space alone, which is the one
+ * thing a statement is never allowed to do. Making position a single cheap read is the schema
+ * taking a side: containment is what AethersWeb models, so containment is what its primary read
+ * returns.
+ */
+export function registerDescribeSpaceTool(server: McpServer, vaultRoot: string): void {
+	server.registerTool(
+		"describe_space",
+		{
+			title: "Describe a space and its position",
+			description:
+				"The primary read. Returns a space's own contents (files with hashes and sizes, log " +
+				"head, current statement) together with its position in the tree (parent, siblings, " +
+				"and each subspace with its tip and shape), plus staleness flags.\n\n" +
+				"Prefer this over read_context when you are about to write a statement: it is what " +
+				"the two required halves — what the space is, and where it sits — are read from. " +
+				"Use read_file on the files it lists when the statement needs what they actually say " +
+				"rather than that they exist.\n\n" +
+				"statement_status reports the AI content's attribution: unsigned, unverified, verified, " +
+				"stale_signature (edited after signing), or stale_verification (edited after a person " +
+				"confirmed it). Anything other than verified is for the user to resolve in Obsidian, " +
+				"not for you — say so rather than treating unverified text as settled.",
+			inputSchema: {
+				space_path: z.string().describe(SPACE_PATH_DESC),
+			},
+		},
+		async ({ space_path }) => {
+			if (!(await isSpaceFs(vaultRoot, space_path))) return notASpace(space_path);
+			const ref = buildSpaceRefFs(vaultRoot, space_path);
+
+			const segments = space_path.split("/");
+			const name = segments[segments.length - 1];
+			const parentPath = segments.slice(0, -1).join("/");
+
+			const files = [];
+			for (const absFilePath of await immediateFilesFs(ref)) {
+				files.push({ path: relativePathFs(ref, absFilePath), hash: await hashFileFs(absFilePath) });
+			}
+
+			const subspaces = [];
+			for (const sub of await immediateSubspacesFs(vaultRoot, ref)) {
+				const [subFiles, subSubs] = await Promise.all([
+					immediateFilesFs(sub),
+					immediateSubspacesFs(vaultRoot, sub),
+				]);
+				subspaces.push({
+					name: sub.path.split("/").pop() ?? sub.path,
+					path: sub.path,
+					tip: await readHeadFs(sub),
+					file_count: subFiles.length,
+					subspace_count: subSubs.length,
+				});
+			}
+
+			// Siblings come from the parent's own subspace listing rather than a path scan, so a
+			// space is placed among the things its parent actually claims as children.
+			let parent: { path: string; name: string } | null = null;
+			let siblings: string[] = [];
+			if (parentPath && (await isSpaceFs(vaultRoot, parentPath))) {
+				const parentRef = buildSpaceRefFs(vaultRoot, parentPath);
+				parent = { path: parentPath, name: parentPath.split("/").pop() ?? parentPath };
+				siblings = (await immediateSubspacesFs(vaultRoot, parentRef))
+					.map((s) => s.path.split("/").pop() ?? s.path)
+					.filter((n) => n !== name);
+			}
+
+			let statement_text = "";
+			let statement_signature = null;
+			let statement_status = "unsigned";
+			try {
+				const found = readSignedStatement(await readFile(ref.contextPath, "utf8"));
+				if (found) {
+					statement_text = found.text;
+					statement_signature = found.signature;
+					statement_status = signatureStatus(found.signature, found.text);
+				}
+			} catch {
+				statement_text = "";
+			}
+
+			const staleness = await checkStalenessFs(vaultRoot, ref);
+
+			return ok({
+				space_path,
+				name,
+				depth: segments.length,
+				head: await readHeadFs(ref),
+				parent,
+				siblings,
+				subspaces,
+				files,
+				statement_text,
+				// Who wrote the statement, and whether a person has confirmed it. "unverified" and
+				// "stale_verification" are the states worth surfacing to the user — only they can
+				// resolve either, and only in Obsidian.
+				statement_signature,
+				statement_status,
+				staleness,
+			});
+		},
+	);
+}

@@ -1,6 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import { walkSpaces } from "./space";
-import { reconcileVault } from "./reconcile";
 import type AethersWebPlugin from "./main";
 import type { AethersWebSettings, SpaceRef } from "./types";
 
@@ -49,12 +48,56 @@ export class AethersWebSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Verify AI content as")
+			.setDesc(
+				"The name recorded when you verify AI-generated content. A verification is only worth anything because a person stands behind it, so it is signed with who that was.",
+			)
+			.addText((text) =>
+				text.setValue(this.plugin.settings.verifierName).onChange(async (value) => {
+					const trimmed = value.trim();
+					if (trimmed.length > 0) {
+						this.plugin.settings.verifierName = trimmed;
+						await this.plugin.saveSettings();
+					}
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Claim unmanaged folders")
+			.setDesc(
+				"Scaffold folders found inside a space that were never claimed themselves. Without this, a folder created outside Obsidian (mkdir, a sync client, the MCP server) is invisible to both live capture and reconciliation — nothing inside it is ever recorded anywhere.",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.autoClaimFolders).onChange(async (value) => {
+					this.plugin.settings.autoClaimFolders = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Background reconciliation (minutes)")
+			.setDesc(
+				"How often to sweep for out-of-band changes while the vault stays open. 0 turns the timer off; vault open and window focus still trigger a sweep. Takes effect on next reload.",
+			)
+			.addText((text) =>
+				text
+					.setValue(String(this.plugin.settings.reconcileIntervalMinutes))
+					.onChange(async (value) => {
+						const minutes = Number(value);
+						if (Number.isFinite(minutes) && minutes >= 0) {
+							this.plugin.settings.reconcileIntervalMinutes = minutes;
+							await this.plugin.saveSettings();
+						}
+					}),
+			);
+
+		new Setting(containerEl)
 			.setName("Run reconciliation now")
 			.setDesc("Manually walk every space and catch up on any out-of-band edits.")
 			.addButton((button) =>
 				button.setButtonText("Reconcile").onClick(async () => {
 					button.setDisabled(true);
-					await reconcileVault(this.app, this.plugin.settings);
+					await this.plugin.reconcile();
 					button.setDisabled(false);
 				}),
 			);

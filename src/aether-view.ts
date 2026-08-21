@@ -1,6 +1,6 @@
 import { ItemView, Modal, Notice, setIcon, TFolder, WorkspaceLeaf } from "obsidian";
 import type { App, ViewStateResult } from "obsidian";
-import { verifyChain } from "./hash";
+import { verifyChain } from "./core/hash";
 import { readHead, readLog } from "./log";
 import { offLogChanged, onLogChanged } from "./log-events";
 import { applyChainRepair, planChainRepair } from "./repair";

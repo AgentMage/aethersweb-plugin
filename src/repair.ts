@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import { normalizePath } from "obsidian";
-import { verifyChain } from "./hash";
+import { verifyChain } from "./core/hash";
 import { appendSpin, readHead, readLog, rewriteLog } from "./log";
 import { regenerateContext } from "./context";
 import type { SpaceRef, Spin, VerifyResult } from "./types";

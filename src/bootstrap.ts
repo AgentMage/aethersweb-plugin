@@ -1,6 +1,6 @@
 import { App, normalizePath, TFolder } from "obsidian";
 import { regenerateContext } from "./context";
-import { appendSpin, ensureSpaceInitialized } from "./log";
+import { appendSubspaceEvent, ensureSpaceInitialized } from "./log";
 import { buildSpaceRef, isSpace } from "./space";
 import type { SpaceRef } from "./types";
 
@@ -11,6 +11,10 @@ import type { SpaceRef } from "./types";
  * hash) and its context is regenerated to pick up the child's tip. If parentPath is empty
  * (vault root) or not itself a space, no parent log is touched — the vault root is never a
  * space per spec dogma, so creating the first user-space only performs steps 1–3.
+ *
+ * Both writes here are idempotent against the vault `create` event `createFolder` fires under
+ * them. They did not used to be, which is why every space this plugin ever scaffolded was born
+ * carrying `space_created` at both seq 0 and seq 1, and announced to its parent twice.
  *
  * This is the single scaffolding path for both the first user-space and every later subspace —
  * no divergent logic between them.
@@ -35,7 +39,9 @@ export async function scaffoldSpace(parentPath: string, name: string, app: App):
 		const parentFolder = app.vault.getAbstractFileByPath(parentPath);
 		if (parentFolder instanceof TFolder && (await isSpace(parentFolder, app))) {
 			const parentRef = buildSpaceRef(parentFolder);
-			await appendSpin(parentRef, "subspace_created", "observed", { subspace_name: name }, app);
+			// Guarded, because `vault.createFolder` above fires a `create` event whose handler
+			// records this same arrival. Whichever runs second finds the parent already knows.
+			await appendSubspaceEvent(parentRef, "subspace_created", name, "observed", app);
 			await regenerateContext(parentRef, app);
 		}
 	}

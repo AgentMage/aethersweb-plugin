@@ -1,6 +1,6 @@
-import { sha256Hex, sha256HexBase64 } from "./hash";
-import { foldLogToLastKnownFiles } from "./reconcile";
-import { foldLogToLastKnownContent } from "./content-fold";
+import { sha256Hex, sha256HexBase64 } from "./core/hash";
+import { foldLogToLastKnownFiles } from "./core/fold-files";
+import { foldLogToLastKnownContent } from "./core/content-fold";
 import type { Spin } from "./types";
 
 export interface ContentMismatch {

@@ -1,10 +1,9 @@
 import { App, Modal, normalizePath, Notice, TFolder } from "obsidian";
 import { AETHER_VIEW_TYPE } from "./aether-view";
 import { scaffoldSpace } from "./bootstrap";
-import { regenerateContext } from "./context";
-import { verifyChain } from "./hash";
+import { regenerateContext, reviewStatement, verifyStatement } from "./context";
+import { verifyChain } from "./core/hash";
 import { readLog } from "./log";
-import { reconcileVault } from "./reconcile";
 import { findOwningSpace, isSpace, walkSpaces } from "./space";
 import type AethersWebPlugin from "./main";
 
@@ -55,6 +54,58 @@ class NamePromptModal extends Modal {
 		if (!trimmed) return;
 		this.close();
 		this.onSubmit(trimmed);
+	}
+}
+
+function describeReview(noteName: string, review: import("./context").StatementReview): string {
+	const sig = review.signature;
+	if (!sig) return `${noteName}: AI content present but unsigned — no attribution to check.`;
+	switch (review.status) {
+		case "verified":
+			return `${noteName}: verified by ${sig.verified?.by} on ${sig.verified?.at.slice(0, 10)}. Written by ${sig.agent}.`;
+		case "stale_verification":
+			return `${noteName}: was verified by ${sig.verified?.by}, but the text changed afterward — needs review again.`;
+		case "stale_signature":
+			return `${noteName}: text was edited after ${sig.agent} signed it — the signature no longer covers it.`;
+		default:
+			return `${noteName}: written by ${sig.agent} on ${sig.written_at.slice(0, 10)}, not yet verified.`;
+	}
+}
+
+/** Shows what is about to be confirmed, then confirms it. */
+class ConfirmModal extends Modal {
+	constructor(
+		app: App,
+		private title: string,
+		private explanation: string,
+		private preview: string,
+		private onConfirm: () => void,
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.createEl("h3", { text: this.title });
+		contentEl.createEl("p", { text: this.explanation });
+
+		const previewEl = contentEl.createEl("blockquote");
+		previewEl.style.maxHeight = "40vh";
+		previewEl.style.overflowY = "auto";
+		previewEl.createEl("p", { text: this.preview });
+
+		const row = contentEl.createDiv({ attr: { style: "margin-top: 12px; text-align: right;" } });
+		row.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+		const confirm = row.createEl("button", { text: "Verify", cls: "mod-cta" });
+		confirm.style.marginLeft = "8px";
+		confirm.addEventListener("click", () => {
+			this.close();
+			this.onConfirm();
+		});
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
 	}
 }
 
@@ -145,11 +196,96 @@ export function registerCommands(plugin: AethersWebPlugin): void {
 		},
 	});
 
+	// Verification is plugin-only by design — an agent confirming its own output would produce a
+	// record indistinguishable from a person's and worth nothing. These are the only ways to write
+	// one, and they require someone to be sitting here.
+	plugin.addCommand({
+		id: "review-ai-content",
+		name: "Review AI content in current note",
+		callback: async () => {
+			const file = app.workspace.getActiveFile();
+			if (!file) {
+				new Notice("AethersWeb: no active note");
+				return;
+			}
+			const review = await reviewStatement(file.path, app);
+			if (!review) {
+				new Notice("AethersWeb: this note has no AI content block");
+				return;
+			}
+			new Notice(describeReview(file.basename, review), 8000);
+		},
+	});
+
+	plugin.addCommand({
+		id: "verify-ai-content",
+		name: "Verify AI content in current note",
+		callback: async () => {
+			const file = app.workspace.getActiveFile();
+			if (!file) {
+				new Notice("AethersWeb: no active note");
+				return;
+			}
+			const review = await reviewStatement(file.path, app);
+			if (!review) {
+				new Notice("AethersWeb: this note has no AI content block");
+				return;
+			}
+			if (!review.signature) {
+				new Notice("AethersWeb: this note's AI content is unsigned — nothing to verify against");
+				return;
+			}
+			// Confirming is an act of standing behind particular words, so the user is shown the
+			// words before it happens rather than after.
+			new ConfirmModal(
+				app,
+				"Verify AI content",
+				`You are confirming that you have read this and stand behind it. It was written by ` +
+					`${review.signature.agent} on ${review.signature.written_at.slice(0, 10)}.`,
+				review.text,
+				async () => {
+					const verified = await verifyStatement(file.path, plugin.settings.verifierName, app);
+					new Notice(
+						verified
+							? `AethersWeb: verified as ${plugin.settings.verifierName}`
+							: "AethersWeb: could not verify — the note changed underneath",
+					);
+				},
+			).open();
+		},
+	});
+
+	plugin.addCommand({
+		id: "list-unverified-ai-content",
+		name: "List unverified AI content across the vault",
+		callback: async () => {
+			const pending: string[] = [];
+			for await (const ref of walkSpaces(app)) {
+				const review = await reviewStatement(ref.contextPath, app);
+				if (review && review.status !== "verified" && review.signature) {
+					pending.push(`${ref.path} — ${review.status}`);
+				}
+			}
+			if (pending.length === 0) {
+				new Notice("AethersWeb: all signed AI content is verified");
+				return;
+			}
+			new Notice(`AethersWeb: ${pending.length} note(s) awaiting verification — see console`);
+			console.info("[AethersWeb] unverified AI content:\n" + pending.join("\n"));
+		},
+	});
+
 	plugin.addCommand({
 		id: "run-reconciliation",
 		name: "Run reconciliation now",
 		callback: async () => {
-			const results = await reconcileVault(app, plugin.settings);
+			// Routed through the plugin's single-flight reconcile so a manual run joins (rather
+			// than races) a focus- or timer-triggered sweep already walking the same tree.
+			const results = (await plugin.reconcile()) as Map<string, unknown[]> | undefined;
+			if (!results) {
+				new Notice("AethersWeb: reconciliation skipped — plugin is globally disabled");
+				return;
+			}
 			const totalSpins = Array.from(results.values()).reduce((sum, spins) => sum + spins.length, 0);
 			new Notice(`AethersWeb: reconciliation done — ${totalSpins} spin(s) across ${results.size} space(s)`);
 		},

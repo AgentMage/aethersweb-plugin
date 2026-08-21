@@ -120,6 +120,32 @@ export function registerCommands(plugin: AethersWebPlugin): void {
 	});
 
 	plugin.addCommand({
+		id: "repair-chain-current",
+		name: "Repair chain for current space",
+		callback: async () => {
+			const file = app.workspace.getActiveFile();
+			const ref = await findOwningSpace(file?.parent ?? null, app);
+			if (!ref) {
+				new Notice("AethersWeb: no active file inside a space");
+				return;
+			}
+			const log = await readLog(ref, app);
+			const result = verifyChain(log);
+			if (result.ok) {
+				new Notice(`AethersWeb: ${ref.path} chain is already OK`);
+				return;
+			}
+			// Repair is a cooperative act, not a silent one — hand off to the log view, where the
+			// user sees exactly what would be quarantined before confirming (see aether-view.ts).
+			const existing = app.workspace.getLeavesOfType(AETHER_VIEW_TYPE);
+			const leaf = existing[0] ?? app.workspace.getLeaf("tab");
+			await leaf.setViewState({ type: AETHER_VIEW_TYPE, active: true, state: { spacePath: ref.path } });
+			app.workspace.revealLeaf(leaf);
+			new Notice(`AethersWeb: ${ref.path} chain is BROKEN — review and repair from the log view`);
+		},
+	});
+
+	plugin.addCommand({
 		id: "run-reconciliation",
 		name: "Run reconciliation now",
 		callback: async () => {
@@ -133,7 +159,9 @@ export function registerCommands(plugin: AethersWebPlugin): void {
 		id: "create-user-space",
 		name: "Create new user-space",
 		callback: () => {
-			new NamePromptModal(app, "New user-space name", async (name) => {
+			// A user-space's parent is the vault itself (the meta-container) — no SpaceRef to
+			// resolve, but the card should still name where the new space lands.
+			new NamePromptModal(app, `New space in "${app.vault.getName()}"`, async (name) => {
 				try {
 					const ref = await scaffoldSpace("", name, app);
 					new Notice(`AethersWeb: created user-space ${ref.path}`);
@@ -148,14 +176,14 @@ export function registerCommands(plugin: AethersWebPlugin): void {
 	plugin.addCommand({
 		id: "create-subspace-here",
 		name: "Create new subspace here",
-		callback: () => {
+		callback: async () => {
 			const file = app.workspace.getActiveFile();
-			new NamePromptModal(app, "New subspace name", async (name) => {
-				const ref = await findOwningSpace(file?.parent ?? null, app);
-				if (!ref) {
-					new Notice("AethersWeb: no active file inside a space to attach a subspace to");
-					return;
-				}
+			const ref = await findOwningSpace(file?.parent ?? null, app);
+			if (!ref) {
+				new Notice("AethersWeb: no active file inside a space to attach a subspace to");
+				return;
+			}
+			new NamePromptModal(app, `New space in "${ref.folder.name}"`, async (name) => {
 				try {
 					const child = await scaffoldSpace(ref.path, name, app);
 					new Notice(`AethersWeb: created subspace ${child.path}`);
@@ -169,23 +197,32 @@ export function registerCommands(plugin: AethersWebPlugin): void {
 }
 
 /**
- * Adds a left-ribbon "New space here" icon — a one-click affordance for the same targeting
- * Obsidian's own file-explorer "+" (new-folder) button doesn't do: that core button always
- * creates at vault root regardless of what's selected, and there's no supported hook to redirect
- * it. This ribbon icon targets the space containing the currently active file instead (same
- * targeting as the "Create new subspace here" command), so it lands in the right place every time.
+ * Adds left-ribbon icons — one-click affordances for actions that otherwise require right-clicking
+ * a specific folder in the file explorer.
+ *
+ * "New space here" targets the same thing Obsidian's own file-explorer "+" (new-folder) button
+ * doesn't: that core button always creates at vault root regardless of what's selected, and
+ * there's no supported hook to redirect it. This targets the space containing the currently
+ * active file instead (same targeting as the "Create new subspace here" command), so it lands in
+ * the right place every time.
+ *
+ * "View .aether log" opens (or retargets an existing) log-view tab, same as the folder context
+ * menu's "View .aether log" and the repair-chain-current command. It targets the active file's
+ * owning space when there is one; otherwise it opens/reveals the tab as-is — untargeted, the view
+ * shows its own "right-click a space folder" hint (or whatever space was last open in that tab)
+ * rather than the ribbon icon refusing to do anything.
  */
 export function registerRibbon(plugin: AethersWebPlugin): void {
 	const { app } = plugin;
 
-	const ribbonEl = plugin.addRibbonIcon("folder-plus", "AethersWeb: new space here", () => {
+	const newSpaceEl = plugin.addRibbonIcon("folder-plus", "AethersWeb: new space here", async () => {
 		const file = app.workspace.getActiveFile();
-		new NamePromptModal(app, "New space name", async (name) => {
-			const ref = await findOwningSpace(file?.parent ?? null, app);
-			if (!ref) {
-				new Notice("AethersWeb: no active file inside a space — open a note in the target space first, or use \"New space here\" from a folder's right-click menu");
-				return;
-			}
+		const ref = await findOwningSpace(file?.parent ?? null, app);
+		if (!ref) {
+			new Notice("AethersWeb: no active file inside a space — open a note in the target space first, or use \"New space here\" from a folder's right-click menu");
+			return;
+		}
+		new NamePromptModal(app, `New space in "${ref.folder.name}"`, async (name) => {
 			try {
 				const child = await scaffoldSpace(ref.path, name, app);
 				new Notice(`AethersWeb: created space ${child.path}`);
@@ -196,9 +233,24 @@ export function registerRibbon(plugin: AethersWebPlugin): void {
 		}).open();
 	});
 
-	// addRibbonIcon has no ordering option, so pin it to the bottom of the ribbon (just above
-	// Obsidian's fixed Settings/Help icons) by moving the element to the end of its container.
-	ribbonEl.parentElement?.appendChild(ribbonEl);
+	const logViewEl = plugin.addRibbonIcon("database", "AethersWeb: view .aether log", async () => {
+		const file = app.workspace.getActiveFile();
+		const ref = await findOwningSpace(file?.parent ?? null, app);
+		const existing = app.workspace.getLeavesOfType(AETHER_VIEW_TYPE);
+		const leaf = existing[0] ?? app.workspace.getLeaf("tab");
+		await leaf.setViewState({
+			type: AETHER_VIEW_TYPE,
+			active: true,
+			state: ref ? { spacePath: ref.path } : {},
+		});
+		app.workspace.revealLeaf(leaf);
+	});
+
+	// addRibbonIcon has no ordering option, so pin these to the bottom of the ribbon (just above
+	// Obsidian's fixed Settings/Help icons) by moving each element to the end of its container, in
+	// the order they should appear.
+	newSpaceEl.parentElement?.appendChild(newSpaceEl);
+	logViewEl.parentElement?.appendChild(logViewEl);
 }
 
 /**
@@ -221,7 +273,7 @@ export function registerContextMenus(plugin: AethersWebPlugin): void {
 					.setTitle("New space here")
 					.setIcon("folder-plus")
 					.onClick(() => {
-						new NamePromptModal(app, "New space name", async (name) => {
+						new NamePromptModal(app, `New space in "${file.name}"`, async (name) => {
 							try {
 								const ref = await scaffoldSpace(file.path, name, app);
 								new Notice(`AethersWeb: created space ${ref.path}`);

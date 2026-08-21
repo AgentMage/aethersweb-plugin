@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
 import { buildNextSpin } from "./hash";
+import { notifyLogChanged } from "./log-events";
 import type { SpaceRef, Spin, SpinPayload, SpinSource, SpinType } from "./types";
 
 /**
@@ -85,7 +86,24 @@ export async function appendSpin(
 			await app.vault.adapter.write(ref.logPath, line);
 		}
 		await writeHead(ref, spin.hash, app);
+		notifyLogChanged(ref.logPath);
 		return spin;
+	});
+}
+
+/**
+ * Overwrites a space's log with exactly `spins` — used only by chain repair (repair.ts). The log
+ * is otherwise strictly append-only; this exists solely to drop orphaned/broken lines that a
+ * repair has already preserved verbatim in a quarantine file. Runs under the same per-log lock as
+ * appendSpin so a repair can never race a concurrent live append. Does not touch head — the
+ * caller appends the audit `chain_repaired` spin right after, which fixes head as a normal
+ * side effect of appendSpin.
+ */
+export async function rewriteLog(ref: SpaceRef, spins: Spin[], app: App): Promise<void> {
+	return withLogLock(ref.logPath, async () => {
+		const text = spins.map((s) => JSON.stringify(s)).join("\n") + (spins.length > 0 ? "\n" : "");
+		await app.vault.adapter.write(ref.logPath, text);
+		notifyLogChanged(ref.logPath);
 	});
 }
 

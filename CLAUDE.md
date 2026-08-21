@@ -16,7 +16,7 @@ The real, openable test vault this plugin deploys into is the **sibling director
 
 - **Every folder is a space.** Single-parent containment, no exceptions. A `user-space` is the grounded center of a person's world; the `vault` is the meta-container holding only user-spaces.
 - Every space maintains two artifacts, which are **not peers**:
-  1. **The log** (`.aether/log.jsonl`) — append-only, hash-chained, authoritative. Records only events at that space's own level (a subspace's changes never produce a parent log entry). Stores hashes/metadata only, never content copies.
+  1. **The log** (`.aether/log.jsonl`) — append-only, hash-chained, authoritative. Records only events at that space's own level (a subspace's changes never produce a parent log entry). Is a record of *what happened*, not just *that* something happened: `file_created` carries the file's full content, `file_modified` carries a unified diff from the previously recorded content (or a full snapshot for binary files, which aren't diffable), and `content_hash` is kept alongside for cheap verification/dedup. Replaying a path's `content`/`diff` sequence reconstructs its content at any point — this is a strict, checked rule (`verifyContentReplay` in `verify-content.ts`), not an aspiration. The one gap: spins written before this discipline existed have no baseline, so pre-existing history from before it shipped is unrecoverable going forward.
   2. **The context** (a visible `<SpaceName>.md` folder note) — derived, disposable, regenerable by replaying the log. Has two halves: an objective frontmatter content list (files, hashes, subspace tip hashes, counts — Dataview-queryable) and an AI-written state statement in the body.
 - **Chains are independent per space** — a space's tip hash does not commit to its children's tips. This makes spaces portable (movable/copyable with intact history) at the cost of subtree verification being a walk rather than one comparison.
 - **Staleness** is tracked only via each subspace's tip hash recorded in the *parent's context* (not its log) — no central head registry. A context's `source_tip` frontmatter vs. the space's actual head tells you if the AI statement is stale without reading further.
@@ -35,7 +35,7 @@ The real, openable test vault this plugin deploys into is the **sibling director
 
 ## Storage/regeneration discipline
 
-- Only the log is costed storage (hashes + metadata, never content). Contexts are fully disposable/regenerable.
+- The log is the costed storage — it now carries real content (full snapshots on create/binary-change, diffs on text-change), not just hashes/metadata, so logs grow faster than a hash-only design would. Contexts remain fully disposable/regenerable and carry no content of their own.
 - The frontmatter content list regenerates cheaply on every change; the AI state statement is debounced (on-demand or past a threshold) so deep edits don't cascade model calls up the whole tree.
 - Log growth is bounded by periodic checkpoints (snapshot hash + covered range), allowing older entries to be pruned/cold-stored while the chain stays verifiable.
 

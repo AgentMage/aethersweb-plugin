@@ -9,6 +9,11 @@ export function sha256HexBytes(bytes: ArrayBuffer): string {
 	return createHash("sha256").update(Buffer.from(bytes)).digest("hex");
 }
 
+/** Hashes the raw bytes a base64 string decodes to — matches sha256HexBytes' result for the same bytes. */
+export function sha256HexBase64(base64: string): string {
+	return createHash("sha256").update(Buffer.from(base64, "base64")).digest("hex");
+}
+
 /** Recursively sorts object keys so payload serialization never depends on insertion order. */
 function sortedPayload(payload: SpinPayload): SpinPayload {
 	const out: Record<string, unknown> = {};

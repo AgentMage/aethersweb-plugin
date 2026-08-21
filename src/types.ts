@@ -11,7 +11,9 @@ export type SpinType =
 	| "subspace_created"
 	| "subspace_removed"
 	/** Reserved for future log-pruning checkpoints (spec's "storage discipline"). Never emitted in v0.1. */
-	| "checkpoint";
+	| "checkpoint"
+	/** Emitted by repair.ts when a broken chain is cooperatively fixed — see ChainRepairPlan. */
+	| "chain_repaired";
 
 /**
  * Whether a spin was witnessed live by a running plugin instance, or inferred afterward
@@ -29,13 +31,35 @@ export type SpinSource = "observed" | "detected";
 export interface SpinPayload {
 	/** Relative to this space's own folder. Never reaches into a subspace's contents. */
 	path?: string;
-	/** sha256 hex of file content. Only for file_created / file_modified. Never file content itself. */
+	/**
+	 * sha256 hex of file content. Only for file_created / file_modified. Kept alongside
+	 * `content` / `diff` below for cheap verification and dedup even though the log now
+	 * carries the content itself — see verifyContentReplay in verify-content.ts.
+	 */
 	content_hash?: string;
 	size?: number;
+	/**
+	 * Full file content — file_created always, and file_modified for binary files (a diff
+	 * isn't meaningful on bytes). See `encoding` for how this string is encoded. This is what
+	 * makes the log a record of what happened, not just that something happened: replaying
+	 * `content` + `diff` across a path's spins reconstructs its content at any point, not only
+	 * its hash.
+	 */
+	content?: string;
+	/** Unified diff from the previous recorded content to this one. Text file_modified only. */
+	diff?: string;
+	/** How `content` (or the text `diff` is applied against) is encoded. Binary uses base64, text uses utf8. */
+	encoding?: "utf8" | "base64";
 	/** Previous relative path, for file_renamed. */
 	old_path?: string;
 	/** Folder name only — never a hash — for subspace_created / subspace_removed. */
 	subspace_name?: string;
+	/** chain_repaired only, below. */
+	broken_reason?: "hash_mismatch" | "prev_hash_mismatch" | "seq_gap" | "parse_error";
+	repair_strategy?: "fork_reconciled" | "truncated";
+	quarantined_count?: number;
+	/** Filename (relative to .aether/) the quarantined spins were preserved in, verbatim. */
+	quarantine_file?: string;
 }
 
 export interface Spin {

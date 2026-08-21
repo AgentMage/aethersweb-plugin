@@ -122,6 +122,20 @@
 	color: rgb(var(--color-red-rgb));
 }
 
+.aetherweb-repair-btn {
+	font-size: 0.78em;
+	padding: 3px 9px;
+	border-radius: var(--radius-s, 6px);
+	border: 1px solid rgba(var(--color-red-rgb), 0.4);
+	background: transparent;
+	color: rgb(var(--color-red-rgb));
+	cursor: pointer;
+}
+
+.aetherweb-repair-btn:hover {
+	background: rgba(var(--color-red-rgb), 0.12);
+}
+
 /* Stat chips */
 
 .aetherweb-stat-row {
@@ -230,6 +244,11 @@
 .aetherweb-type-chip.is-active.type-checkpoint {
 	background: var(--background-modifier-border);
 	color: var(--text-normal);
+}
+
+.aetherweb-type-chip.is-active.type-chain_repaired {
+	background: rgba(var(--color-red-rgb), 0.3);
+	color: rgb(var(--color-red-rgb));
 }
 
 .aetherweb-toolbar-btn {
@@ -363,6 +382,11 @@
 .aetherweb-type-pill.type-checkpoint {
 	background: var(--background-modifier-border);
 	color: var(--text-muted);
+}
+
+.aetherweb-type-pill.type-chain_repaired {
+	background: rgba(var(--color-red-rgb), 0.15);
+	color: rgb(var(--color-red-rgb));
 }
 
 .aetherweb-hash-chip {

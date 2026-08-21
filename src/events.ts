@@ -1,8 +1,9 @@
 import { normalizePath, TFile, TFolder } from "obsidian";
 import { regenerateContext } from "./context";
+import { recordFileContentSpin } from "./content-record";
 import { appendSpin, ensureSpaceInitialized } from "./log";
 import { isSpaceEnabled } from "./settings";
-import { buildSpaceRef, findOwningSpace, hashFile, isSpace, relativePath } from "./space";
+import { buildSpaceRef, findOwningSpace, isSpace, relativePath } from "./space";
 import type AethersWebPlugin from "./main";
 import type { SpaceRef } from "./types";
 
@@ -28,14 +29,7 @@ function scheduleObservedModify(plugin: AethersWebPlugin, ref: SpaceRef, file: T
 		try {
 			const current = plugin.app.vault.getAbstractFileByPath(file.path);
 			if (!(current instanceof TFile)) return; // deleted/moved before the timer fired
-			const hash = await hashFile(current, plugin.app);
-			await appendSpin(
-				ref,
-				"file_modified",
-				"observed",
-				{ path: relativePath(ref, current), content_hash: hash, size: current.stat.size },
-				plugin.app,
-			);
+			await recordFileContentSpin(ref, "file_modified", relativePath(ref, current), current, "observed", plugin.app);
 			await regenerateContext(ref, plugin.app);
 		} catch (err) {
 			console.error("[AethersWeb] failed to record observed file_modified", err);
@@ -81,14 +75,7 @@ export function registerVaultEventHandlers(plugin: AethersWebPlugin): void {
 			if (!(file instanceof TFile)) return;
 			const ref = await findOwningSpace(file.parent, app);
 			if (!ref || file.path === ref.contextPath || !isSpaceEnabled(ref, plugin.settings)) return;
-			const hash = await hashFile(file, app);
-			await appendSpin(
-				ref,
-				"file_created",
-				"observed",
-				{ path: relativePath(ref, file), content_hash: hash, size: file.stat.size },
-				app,
-			);
+			await recordFileContentSpin(ref, "file_created", relativePath(ref, file), file, "observed", app);
 			await regenerateContext(ref, app);
 		}),
 	);
@@ -192,14 +179,7 @@ export function registerVaultEventHandlers(plugin: AethersWebPlugin): void {
 							await regenerateContext(oldRef, app);
 						}
 					}
-					const hash = await hashFile(file, app);
-					await appendSpin(
-						ref,
-						"file_created",
-						"observed",
-						{ path: relativePath(ref, file), content_hash: hash, size: file.stat.size },
-						app,
-					);
+					await recordFileContentSpin(ref, "file_created", relativePath(ref, file), file, "observed", app);
 					await regenerateContext(ref, app);
 					return;
 				}

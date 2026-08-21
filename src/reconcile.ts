@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
 import { regenerateContext } from "./context";
+import { recordFileContentSpin } from "./content-record";
 import { appendSpin, readLog } from "./log";
 import { isSpaceEnabled } from "./settings";
 import { hashFile, immediateFiles, immediateSubspaces, relativePath, walkSpaces } from "./space";
@@ -11,7 +12,7 @@ interface FileState {
 }
 
 /** Replays a space's own log into "what was last recorded per path", honoring create/modify/delete/rename. */
-function foldLogToLastKnownFiles(log: Spin[]): Record<string, FileState> {
+export function foldLogToLastKnownFiles(log: Spin[]): Record<string, FileState> {
 	const state: Record<string, FileState> = {};
 	for (const spin of log) {
 		switch (spin.spin_type) {
@@ -74,25 +75,9 @@ export async function reconcileSpace(ref: SpaceRef, app: App): Promise<Spin[]> {
 		const prior = knownFiles[path];
 
 		if (!prior || prior.deleted) {
-			emitted.push(
-				await appendSpin(
-					ref,
-					"file_created",
-					"detected",
-					{ path, content_hash: currentHash, size: file.stat.size },
-					app,
-				),
-			);
+			emitted.push(await recordFileContentSpin(ref, "file_created", path, file, "detected", app, log));
 		} else if (prior.hash !== currentHash) {
-			emitted.push(
-				await appendSpin(
-					ref,
-					"file_modified",
-					"detected",
-					{ path, content_hash: currentHash, size: file.stat.size },
-					app,
-				),
-			);
+			emitted.push(await recordFileContentSpin(ref, "file_modified", path, file, "detected", app, log));
 		}
 	}
 

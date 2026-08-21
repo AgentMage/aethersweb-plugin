@@ -1,8 +1,12 @@
-import { ItemView, Notice, setIcon, TFolder, WorkspaceLeaf } from "obsidian";
-import type { ViewStateResult } from "obsidian";
+import { ItemView, Modal, Notice, setIcon, TFolder, WorkspaceLeaf } from "obsidian";
+import type { App, ViewStateResult } from "obsidian";
 import { verifyChain } from "./hash";
-import { readLog } from "./log";
+import { readHead, readLog } from "./log";
+import { offLogChanged, onLogChanged } from "./log-events";
+import { applyChainRepair, planChainRepair } from "./repair";
+import type { ChainRepairPlan } from "./repair";
 import { buildSpaceRef, findOwningSpace, immediateSubspaces, isSpace } from "./space";
+import { verifyContentReplay } from "./verify-content";
 import type AethersWebPlugin from "./main";
 import type { SpaceRef, Spin, SpinPayload, SpinType } from "./types";
 
@@ -21,6 +25,7 @@ const TYPE_ICONS: Record<SpinType, string> = {
 	subspace_created: "folder-plus",
 	subspace_removed: "folder-minus",
 	checkpoint: "flag",
+	chain_repaired: "wrench",
 };
 
 const ALL_TYPES: SpinType[] = [
@@ -32,6 +37,7 @@ const ALL_TYPES: SpinType[] = [
 	"subspace_created",
 	"subspace_removed",
 	"checkpoint",
+	"chain_repaired",
 ];
 
 function formatPayload(payload: SpinPayload): string {
@@ -40,7 +46,53 @@ function formatPayload(payload: SpinPayload): string {
 	if (payload.old_path) parts.push(`← ${payload.old_path}`);
 	if (payload.subspace_name) parts.push(payload.subspace_name);
 	if (payload.size !== undefined) parts.push(`${payload.size}B`);
+	if (payload.diff !== undefined) parts.push(`diff (${payload.diff.length}B)`);
+	else if (payload.content !== undefined) parts.push(`content (${payload.content.length}B)`);
+	if (payload.repair_strategy) {
+		parts.push(`${payload.repair_strategy} (${payload.broken_reason}) — ${payload.quarantined_count} quarantined → ${payload.quarantine_file}`);
+	}
 	return parts.length > 0 ? parts.join("  ") : "—";
+}
+
+/**
+ * Confirms a chain repair before it touches disk — never silently rewrite a hash-chained log.
+ * Lists exactly which spins will be quarantined so the fix is a cooperative act (user sees and
+ * approves the diagnosis), not an automatic one.
+ */
+class ChainRepairModal extends Modal {
+	constructor(app: App, private plan: ChainRepairPlan, private onConfirm: () => void) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.createEl("h3", { text: "Repair broken chain?" });
+		contentEl.createEl("p", {
+			text:
+				this.plan.strategy === "fork_reconciled"
+					? `Found ${this.plan.quarantine.length} orphaned spin(s) left over from a past write race — nothing later in the chain was ever built on them. They'll be moved to a quarantine file, unchanged, and dropped from the authoritative log. Everything currently reachable from head is kept exactly as-is.`
+					: `The chain breaks at the first of ${this.plan.quarantine.length} spin(s) below (${this.plan.reason}). They'll be moved to a quarantine file and dropped from the authoritative log; reconciliation will re-detect any real on-disk state afterward.`,
+		});
+		const list = contentEl.createEl("ul", {
+			attr: { style: "max-height: 240px; overflow-y: auto; font-family: var(--font-monospace); font-size: 0.85em;" },
+		});
+		for (const s of this.plan.quarantine) {
+			list.createEl("li", { text: `seq ${s.seq} · ${s.spin_type} · ${s.source} · ${s.hash.slice(0, 10)}…` });
+		}
+		const row = contentEl.createDiv({
+			attr: { style: "margin-top: 14px; text-align: right; display: flex; gap: 8px; justify-content: flex-end;" },
+		});
+		row.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+		const confirmBtn = row.createEl("button", { text: "Repair chain", cls: "mod-warning" });
+		confirmBtn.addEventListener("click", () => {
+			this.close();
+			this.onConfirm();
+		});
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
 }
 
 function formatRelativeTime(iso: string): string {
@@ -89,11 +141,40 @@ export class AetherLogView extends ItemView {
 	private newestFirst = true;
 	private expandedSeqs = new Set<number>();
 	private tableWrap: HTMLElement | null = null;
+	/**
+	 * seq to highlight as the chain-break row, or undefined when the chain is clean. Only ever
+	 * written by render() (once per full render, including back to undefined for a healthy
+	 * space) — renderTable() just reads it, so filter/search/order changes that call renderTable()
+	 * directly can't accidentally carry a stale broken-space value into a space that's fine.
+	 */
 	private brokenAtSeq: number | undefined;
+
+	/**
+	 * The space's own log is under .aether/ — a dotfolder Obsidian never indexes, so no vault
+	 * "modify" event ever fires for it. log-events.ts notifies instead (every write funnels
+	 * through appendSpin/rewriteLog), so this view can auto-refresh instead of going stale until
+	 * someone clicks the manual "Refresh" action. Debounced so a burst of writes (reconciliation,
+	 * a chain repair) coalesces into one re-render instead of one per spin.
+	 */
+	private subscribedLogPath: string | null = null;
+	private readonly onLogChangedDebounced = debounce(() => void this.render(), 200);
 
 	constructor(leaf: WorkspaceLeaf, plugin: AethersWebPlugin) {
 		super(leaf);
 		this.plugin = plugin;
+	}
+
+	private subscribeToLog(logPath: string): void {
+		if (this.subscribedLogPath === logPath) return;
+		this.unsubscribeFromLog();
+		onLogChanged(logPath, this.onLogChangedDebounced);
+		this.subscribedLogPath = logPath;
+	}
+
+	private unsubscribeFromLog(): void {
+		if (!this.subscribedLogPath) return;
+		offLogChanged(this.subscribedLogPath, this.onLogChangedDebounced);
+		this.subscribedLogPath = null;
 	}
 
 	getViewType(): string {
@@ -134,6 +215,10 @@ export class AetherLogView extends ItemView {
 		await this.render();
 	}
 
+	async onClose(): Promise<void> {
+		this.unsubscribeFromLog();
+	}
+
 	private async switchTo(spacePath: string): Promise<void> {
 		await this.leaf.setViewState({
 			type: AETHER_VIEW_TYPE,
@@ -148,19 +233,23 @@ export class AetherLogView extends ItemView {
 		contentEl.addClass("aetherweb-log-view");
 
 		if (!this.spacePath) {
+			this.unsubscribeFromLog();
 			this.renderEmpty(contentEl, "database", 'Right-click a space folder → "View .aether log" to open one here.');
 			return;
 		}
 
 		const folder = app.vault.getAbstractFileByPath(this.spacePath);
 		if (!(folder instanceof TFolder) || !(await isSpace(folder, app))) {
+			this.unsubscribeFromLog();
 			this.renderEmpty(contentEl, "alert-triangle", `"${this.spacePath}" is not a claimed space (or no longer exists).`);
 			return;
 		}
 
 		const ref = buildSpaceRef(folder);
+		this.subscribeToLog(ref.logPath);
 		this.cachedLog = await readLog(ref, app);
 		const result = verifyChain(this.cachedLog);
+		const contentResult = verifyContentReplay(this.cachedLog);
 
 		// ---- header: title + chain badge ----
 		const header = contentEl.createDiv({ cls: "aetherweb-log-header" });
@@ -174,6 +263,50 @@ export class AetherLogView extends ItemView {
 		badge.createSpan({
 			text: result.ok ? "chain OK" : `BROKEN @ seq ${result.brokenAtSeq} (${result.reason})`,
 		});
+
+		// Content-integrity badge: does replaying every path's content/diff chain still
+		// reconstruct what the log itself recorded as that path's hash? This is the check that
+		// makes "the log can reconstruct current state" a verified rule, not an assumption — see
+		// verifyContentReplay. Pre-instrumentation paths (no content/diff ever recorded) are
+		// called out separately, not counted as a failure.
+		const contentBadge = header.createDiv({
+			cls: `aetherweb-chain-badge ${contentResult.ok ? "is-ok" : "is-broken"}`,
+		});
+		setIcon(contentBadge, contentResult.ok ? "check-circle-2" : "alert-circle");
+		const contentBadgeText = contentResult.ok
+			? `content OK (${contentResult.checked})`
+			: `${contentResult.mismatches.length} content mismatch(es)`;
+		contentBadge.createSpan({
+			text:
+				contentResult.unverifiable.length > 0
+					? `${contentBadgeText} · ${contentResult.unverifiable.length} pre-instrumentation`
+					: contentBadgeText,
+			attr: contentResult.unverifiable.length > 0
+				? { title: `No content baseline in the log for: ${contentResult.unverifiable.join(", ")}` }
+				: {},
+		});
+
+		if (!result.ok) {
+			const repairBtn = header.createEl("button", { cls: "aetherweb-repair-btn", text: "Repair chain" });
+			repairBtn.addEventListener("click", async () => {
+				const currentHead = await readHead(ref, app);
+				const plan = planChainRepair(this.cachedLog, currentHead);
+				if (!plan) {
+					new Notice("AethersWeb: chain looks fine now — try refreshing");
+					return;
+				}
+				new ChainRepairModal(app, plan, async () => {
+					try {
+						await applyChainRepair(ref, app);
+						new Notice(`AethersWeb: chain repaired — ${plan.quarantine.length} spin(s) quarantined`);
+						await this.render();
+					} catch (err) {
+						console.error("[AethersWeb] chain repair failed", err);
+						new Notice(`AethersWeb: repair failed — ${(err as Error).message}`);
+					}
+				}).open();
+			});
+		}
 
 		await this.renderNav(contentEl, ref);
 
@@ -252,8 +385,12 @@ export class AetherLogView extends ItemView {
 		});
 
 		// ---- table (rebuilt independently on filter/search/order changes) ----
+		// Always assign here, including back to undefined — renderTable() only ever reads this
+		// field, it never sets it, so a healthy space can't inherit a red row left over from
+		// whatever broken space was open in this same tab before it (see brokenAtSeq's doc comment).
+		this.brokenAtSeq = result.ok ? undefined : result.brokenAtSeq;
 		this.tableWrap = contentEl.createDiv({ cls: "aetherweb-table-wrap" });
-		this.renderTable(result.ok ? undefined : result.brokenAtSeq);
+		this.renderTable();
 	}
 
 	/**
@@ -294,8 +431,7 @@ export class AetherLogView extends ItemView {
 		empty.createEl("p", { text });
 	}
 
-	private renderTable(brokenAtSeq?: number): void {
-		if (brokenAtSeq !== undefined) this.brokenAtSeq = brokenAtSeq;
+	private renderTable(): void {
 		const wrap = this.tableWrap;
 		if (!wrap) return;
 		wrap.empty();

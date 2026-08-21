@@ -1,8 +1,8 @@
 import { TFile, TFolder } from "obsidian";
 import { regenerateContext } from "./context";
-import { appendSpin } from "./log";
+import { appendSpin, ensureSpaceInitialized } from "./log";
 import { isSpaceEnabled } from "./settings";
-import { findOwningSpace, hashFile, isSpace, relativePath } from "./space";
+import { buildSpaceRef, findOwningSpace, hashFile, isSpace, relativePath } from "./space";
 import type AethersWebPlugin from "./main";
 import type { SpaceRef } from "./types";
 
@@ -54,7 +54,31 @@ export function registerVaultEventHandlers(plugin: AethersWebPlugin): void {
 
 	plugin.registerEvent(
 		app.vault.on("create", async (file) => {
-			if (isIgnorablePath(file.path) || !(file instanceof TFile)) return;
+			if (isIgnorablePath(file.path)) return;
+
+			if (file instanceof TFolder) {
+				// Any folder created (or dropped in) directly inside an existing claimed space
+				// becomes a space itself immediately — no separate "Create subspace" command
+				// needed. ensureSpaceInitialized is idempotent: a folder that arrives with its
+				// own pre-existing .aether/ (moved in from outside the vault — e.g. restored
+				// from a backup or copied from another vault, per the spec's portability model)
+				// just gets its head repaired, never re-initialized or stomped.
+				// Note: a bulk external drag-in of a whole folder *tree* can race a sibling
+				// file's create event against this folder's still-in-flight scaffold; anything
+				// missed live is caught by the next reconciliation pass as `detected` spins.
+				const parentRef = await findOwningSpace(file.parent, app);
+				if (!parentRef || !isSpaceEnabled(parentRef, plugin.settings)) return;
+
+				const ref = buildSpaceRef(file);
+				await ensureSpaceInitialized(ref, app);
+				await regenerateContext(ref, app);
+
+				await appendSpin(parentRef, "subspace_created", "observed", { subspace_name: file.name }, app);
+				await regenerateContext(parentRef, app);
+				return;
+			}
+
+			if (!(file instanceof TFile)) return;
 			const ref = await findOwningSpace(file.parent, app);
 			if (!ref || file.path === ref.contextPath || !isSpaceEnabled(ref, plugin.settings)) return;
 			const hash = await hashFile(file, app);

@@ -1,5 +1,5 @@
 import { Plugin } from "obsidian";
-import { registerCommands } from "./commands";
+import { registerCommands, registerContextMenus, registerRibbon } from "./commands";
 import { registerVaultEventHandlers } from "./events";
 import { reconcileVault } from "./reconcile";
 import { AethersWebSettingTab } from "./settings";
@@ -13,6 +13,8 @@ export default class AethersWebPlugin extends Plugin {
 		await this.loadSettings();
 		this.addSettingTab(new AethersWebSettingTab(this.app, this));
 		registerCommands(this);
+		registerContextMenus(this);
+		registerRibbon(this);
 
 		// Reconciliation must complete before live event listeners attach, so reconciliation's
 		// own writes are never double-counted as "observed" — and folder listings need the

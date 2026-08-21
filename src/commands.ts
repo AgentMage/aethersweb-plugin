@@ -1,4 +1,4 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Modal, Notice, TFolder } from "obsidian";
 import { scaffoldSpace } from "./bootstrap";
 import { regenerateContext } from "./context";
 import { verifyChain } from "./hash";
@@ -153,4 +153,72 @@ export function registerCommands(plugin: AethersWebPlugin): void {
 			}).open();
 		},
 	});
+}
+
+/**
+ * Adds a left-ribbon "New space here" icon — a one-click affordance for the same targeting
+ * Obsidian's own file-explorer "+" (new-folder) button doesn't do: that core button always
+ * creates at vault root regardless of what's selected, and there's no supported hook to redirect
+ * it. This ribbon icon targets the space containing the currently active file instead (same
+ * targeting as the "Create new subspace here" command), so it lands in the right place every time.
+ */
+export function registerRibbon(plugin: AethersWebPlugin): void {
+	const { app } = plugin;
+
+	const ribbonEl = plugin.addRibbonIcon("folder-plus", "AethersWeb: new space here", () => {
+		const file = app.workspace.getActiveFile();
+		new NamePromptModal(app, "New space name", async (name) => {
+			const ref = await findOwningSpace(file?.parent ?? null, app);
+			if (!ref) {
+				new Notice("AethersWeb: no active file inside a space — open a note in the target space first, or use \"New space here\" from a folder's right-click menu");
+				return;
+			}
+			try {
+				const child = await scaffoldSpace(ref.path, name, app);
+				new Notice(`AethersWeb: created space ${child.path}`);
+			} catch (err) {
+				console.error("[AethersWeb] failed to create space", err);
+				new Notice(`AethersWeb: failed to create space — ${(err as Error).message}`);
+			}
+		}).open();
+	});
+
+	// addRibbonIcon has no ordering option, so pin it to the bottom of the ribbon (just above
+	// Obsidian's fixed Settings/Help icons) by moving the element to the end of its container.
+	ribbonEl.parentElement?.appendChild(ribbonEl);
+}
+
+/**
+ * Adds "New space here" to the right-click menu of every folder in the file explorer. This is
+ * the precise-targeting counterpart to the create-* commands above: Obsidian's own native
+ * "Create new folder" always lands at vault root regardless of what's selected (that's Obsidian's
+ * placement logic, not something a plugin can redirect), so right-clicking the exact intended
+ * parent and scaffolding straight into it is the only reliable way to put a new space where the
+ * user is actually looking.
+ */
+export function registerContextMenus(plugin: AethersWebPlugin): void {
+	const { app } = plugin;
+
+	plugin.registerEvent(
+		app.workspace.on("file-menu", (menu, file) => {
+			if (!(file instanceof TFolder)) return;
+
+			menu.addItem((item) =>
+				item
+					.setTitle("New space here")
+					.setIcon("folder-plus")
+					.onClick(() => {
+						new NamePromptModal(app, "New space name", async (name) => {
+							try {
+								const ref = await scaffoldSpace(file.path, name, app);
+								new Notice(`AethersWeb: created space ${ref.path}`);
+							} catch (err) {
+								console.error("[AethersWeb] failed to create space", err);
+								new Notice(`AethersWeb: failed to create space — ${(err as Error).message}`);
+							}
+						}).open();
+					}),
+			);
+		}),
+	);
 }

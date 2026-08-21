@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { resolveVaultRoot } from "./config";
+import { resolveHttpPort, resolveHttpToken, resolveReconcileIntervalMinutes, resolveVaultRoot } from "./config";
+import { startHttpServer } from "./http-server";
+import { startReconcileSweep } from "./reconcile-sweep";
 import { registerAppendSpinTool } from "./tools/append-spin";
 import { registerCheckStalenessTool } from "./tools/check-staleness";
 import { registerCreateSpaceTool } from "./tools/create-space";
@@ -19,9 +21,13 @@ import { registerVerifyChainTool } from "./tools/verify-chain";
 import { registerDeleteFileTool, registerWriteFileTool } from "./tools/write-file";
 import { registerWriteStatementTool } from "./tools/write-statement";
 
-async function main(): Promise<void> {
-	const vaultRoot = resolveVaultRoot();
-
+/**
+ * Builds one McpServer with the full tool surface registered. Called exactly once for the whole
+ * process in stdio mode (one process, one client, one server instance for its entire lifetime),
+ * and once per session in HTTP mode, where many concurrent clients each need their own
+ * server/transport pair — see http-server.ts's own doc comment for why that's not shared.
+ */
+export function buildServer(vaultRoot: string): McpServer {
 	const server = new McpServer({ name: "aethersweb", version: "0.1.0" });
 
 	// Grouped by what they do to the vault — nothing, then structure, then content. Registration
@@ -52,9 +58,29 @@ async function main(): Promise<void> {
 	registerReconcileSpaceTool(server, vaultRoot);
 	registerAppendSpinTool(server, vaultRoot);
 
-	const transport = new StdioServerTransport();
-	await server.connect(transport);
-	console.error(`[aethersweb-mcp-server] ready, vault: ${vaultRoot}`);
+	return server;
+}
+
+async function main(): Promise<void> {
+	const vaultRoot = resolveVaultRoot();
+	const httpPort = resolveHttpPort();
+
+	if (httpPort === undefined) {
+		// stdio mode — unchanged: one process, one client, one server instance, connected over
+		// stdin/stdout by whatever local process launched us (e.g. Claude Code on this machine).
+		const server = buildServer(vaultRoot);
+		await server.connect(new StdioServerTransport());
+		console.error(`[aethersweb-mcp-server] ready (stdio), vault: ${vaultRoot}`);
+		return;
+	}
+
+	// HTTP mode: a long-running, potentially remote-reachable process (see mcp-server/README.md
+	// for the Tailscale + systemd setup this is meant to run under). resolveHttpToken throws
+	// rather than falling back to unauthenticated if the token env var is missing.
+	const token = resolveHttpToken();
+	startHttpServer(() => buildServer(vaultRoot), httpPort, token);
+	startReconcileSweep(vaultRoot, resolveReconcileIntervalMinutes());
+	console.error(`[aethersweb-mcp-server] ready (http :${httpPort}), vault: ${vaultRoot}`);
 }
 
 main().catch((err) => {

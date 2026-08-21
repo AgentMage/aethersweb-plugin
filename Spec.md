@@ -365,7 +365,9 @@ references. A shared project has no home folder — it is the emergent join over
 referencing the same project ID, with each user's space holding only their own thread. This
 preserves the root dogma and means nobody stores anyone else's content.
 
-Also deferred: encryption and publicity tiers, an external always-on daemon, and any social surface.
+Also deferred: encryption and publicity tiers, and any social surface. (An external always-on
+daemon now exists as deployment infrastructure — see `mcp-server/README.md` — not a change to the
+core model above.)
 
 ## Terminology
 

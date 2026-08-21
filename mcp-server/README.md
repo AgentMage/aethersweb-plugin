@@ -26,6 +26,38 @@ node dist/server.js --vault /path/to/vault
 `npm run dev` watches; `npm test` runs vitest; `npm run typecheck` runs `tsc --noEmit`.
 Interactive poking: `npx @modelcontextprotocol/inspector node dist/server.js --vault <path>`.
 
+## Running as a remote/always-on server
+
+By default this server only speaks stdio: one process per local client (e.g. Claude Code on the
+same machine), exiting when that client disconnects. To also accept remote MCP connections — a
+phone over Tailscale, for instance — pass `--http <port>` or set `AETHERSWEB_HTTP_PORT`, plus
+`AETHERSWEB_HTTP_TOKEN` (a bearer secret; the server refuses to start on `--http` without one):
+
+```sh
+AETHERSWEB_HTTP_TOKEN=$(openssl rand -hex 32) node dist/server.js --vault /path/to/vault --http 8420
+```
+
+Every request must send `Authorization: Bearer <token>`; anything else gets 401. This is a static
+shared secret, not OAuth 2.1 — a deliberate simplification, adequate only because the port is
+meant to be reachable exclusively via `tailscale serve` inside a private tailnet (Tailscale's own
+network-layer auth is the first factor; the token is a second, scoped one), never the public
+internet. **Do not use `tailscale funnel`** with this — that exposes it publicly, which this auth
+model isn't built for.
+
+In HTTP mode the server also runs a periodic reconciliation sweep across the whole vault (every
+`AETHERSWEB_RECONCILE_INTERVAL_MINUTES` minutes, default 5; `0` disables it) — the headless
+equivalent of the Obsidian plugin's own `reconcile()` timer, needed because a long-running HTTP
+process has no plugin open to notice a file a sync client (e.g. Syncthing) dropped in from
+another device.
+
+To run this persistently on a single always-on machine: a `systemd --user` unit
+(`~/.config/systemd/user/aethersweb-mcp.service`) with `ExecStart` pointing at `dist/server.js
+--vault <path> --http <port>`, an `EnvironmentFile=` pointing at a `chmod 600` file holding
+`AETHERSWEB_HTTP_TOKEN` (kept outside the repo, never committed), `Restart=on-failure`, and
+`WantedBy=default.target` — then `tailscale serve --bg <port>` to publish it at
+`https://<machine>.<tailnet>.ts.net/mcp` for tailnet peers only, with TLS auto-terminated via
+Tailscale's own MagicDNS cert.
+
 ## Tools
 
 Addressing is by vault-relative folder path (e.g. `"UserSpace/Location"`) — no ID system. The vault

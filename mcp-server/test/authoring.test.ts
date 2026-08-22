@@ -8,11 +8,11 @@ import { verifyChain } from "../../src/core/hash";
 import { verifyContentReplay } from "../../src/verify-content";
 import { regenerateContextFs } from "../src/context-fs";
 import { reconcileSpaceFs } from "../src/reconcile-fs";
-import { buildSpaceRefFs, isSpaceFs } from "../src/space-fs";
-import { appendFileDeletedFs, ensureSpaceInitializedFs, readHeadFs, readLogFs } from "../src/vault-io";
+import { buildSpaceRefFs, hashFileFs, isSpaceFs } from "../src/space-fs";
+import { appendFileDeletedFs, appendSpinFs, ensureSpaceInitializedFs, readHeadFs, readLogFs } from "../src/vault-io";
 import { signatureStatus } from "../../src/core/signature";
 import { readSignedStatement, StatementContainmentError } from "../../src/core/statement";
-import { moveSpaceFs, removeFileFs, writeFileFs, WriteError } from "../src/write-fs";
+import { moveSpaceFs, recordWrittenFile, removeFileFs, writeFileFs, WriteError } from "../src/write-fs";
 
 let vaultRoot: string;
 
@@ -67,6 +67,35 @@ describe("write_file's layer", () => {
 		expect(foldLogToLastKnownContent(log)["GPS.md"].content).toContain("Blanca Peak");
 		expect(verifyContentReplay(log).ok).toBe(true);
 		expect(verifyChain(log).ok).toBe(true);
+	});
+
+	it("diffs against \"\" (never a full snapshot) when a modify has no known text baseline", async () => {
+		const ref = await makeSpace("UserSpace");
+		const path = "Legacy.md";
+		const absPath = join(vaultRoot, "UserSpace", path);
+		const original = "first line\n";
+
+		// Simulate history predating this discipline: the file exists on disk and the log knows
+		// its hash, but the file_created spin carries no `content` — the trail is cold at seq 0.
+		await writeFile(absPath, original, "utf8");
+		await appendSpinFs(ref, "file_created", "detected", {
+			path,
+			content_hash: await hashFileFs(absPath),
+			size: original.length,
+		});
+
+		const updated = "first line\nsecond line\n";
+		await writeFile(absPath, updated, "utf8");
+		const spin = await recordWrittenFile(ref, path, absPath, "file_modified", "detected");
+
+		// A diff against "" round-trips losslessly, so the modify still records only the change —
+		// never the whole file again — even with no prior baseline to diff against.
+		expect(spin?.payload.diff).toBeDefined();
+		expect(spin?.payload.content).toBeUndefined();
+
+		const log = await readLogFs(ref);
+		expect(foldLogToLastKnownContent(log)[path].content).toBe(updated);
+		expect(verifyContentReplay(log).ok).toBe(true);
 	});
 
 	it("stands down on a write that changed nothing", async () => {

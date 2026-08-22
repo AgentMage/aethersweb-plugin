@@ -12,7 +12,10 @@ import type { SpaceRef, Spin, SpinPayload, SpinSource } from "./types";
  * events.ts (observed) and reconcile.ts (detected) so the diff-vs-snapshot decision is made
  * once, not duplicated per call site. Always writes real content into the log (never just a
  * hash): full content for file_created and for binary changes, a unified diff for text changes
- * against whatever the log itself last recorded.
+ * against whatever the log itself last recorded — or against "" when there's no usable text
+ * baseline (a prior version recorded as binary, or history predating this discipline). jsdiff's
+ * patch format round-trips losslessly from "", so this still reconstructs and verifies; a text
+ * file_modified never repeats the whole file.
  *
  * Returns null when the log already records this exact content at this path — Obsidian fires
  * `modify` on every save, including saves that changed nothing, and the debounce window merges
@@ -47,13 +50,12 @@ export async function recordFileContentSpin(
 		} else {
 			const newText = await app.vault.cachedRead(file);
 			payload.encoding = "utf8";
-			const prior = spin_type === "file_modified" ? foldLogToLastKnownContent(log)[path] : undefined;
-			if (prior?.content != null && prior.encoding === "utf8") {
-				payload.diff = computeDiff(prior.content, newText);
-			} else {
-				// No usable text baseline (a create, pre-instrumentation history, or a prior version
-				// recorded as binary) — full snapshot rather than a diff against nothing.
+			if (spin_type === "file_created") {
 				payload.content = newText;
+			} else {
+				const prior = foldLogToLastKnownContent(log)[path];
+				const baseline = prior?.content != null && prior.encoding === "utf8" ? prior.content : "";
+				payload.diff = computeDiff(baseline, newText);
 			}
 		}
 

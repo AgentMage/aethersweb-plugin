@@ -154,11 +154,12 @@ export async function recordWrittenFile(
 		} else {
 			const newText = await readFile(absPath, "utf8");
 			payload.encoding = "utf8";
-			const prior = spin_type === "file_modified" ? foldLogToLastKnownContent(log)[relPath] : undefined;
-			if (prior?.content != null && prior.encoding === "utf8") {
-				payload.diff = computeDiff(prior.content, newText);
-			} else {
+			if (spin_type === "file_created") {
 				payload.content = newText;
+			} else {
+				const prior = foldLogToLastKnownContent(log)[relPath];
+				const baseline = prior?.content != null && prior.encoding === "utf8" ? prior.content : "";
+				payload.diff = computeDiff(baseline, newText);
 			}
 		}
 		return { spin_type, source, payload };

@@ -13,9 +13,13 @@ export interface ContentState {
  * file_created's full content and each file_modified's diff in order. Mirrors
  * reconcile.ts's foldLogToLastKnownFiles traversal exactly, but carries reconstructed content
  * forward instead of just a hash — this is what lets the log actually answer "what did this file
- * contain", not only "did this file change". A modify spin recorded before this feature shipped
- * (no `content`/`diff` field), or a diff with no known prior baseline to apply it to, yields
- * content: null rather than fabricating one — the trail goes cold there, not silently wrong.
+ * contain", not only "did this file change". A diff with no known prior text baseline is applied
+ * against "" — that's how a modify with no usable baseline was itself recorded (see
+ * content-record.ts), and jsdiff's patch format round-trips losslessly from "". Only a modify
+ * spin recorded before this feature shipped (neither `content` nor `diff` present at all) yields
+ * content: null — the trail genuinely goes cold there, not silently wrong. A `content` field is
+ * still honored when present, for backward compatibility with logs written before this file
+ * stopped falling back to a full snapshot.
  *
  * Kept in its own module (not reconcile.ts, not content-record.ts) since both of those depend on
  * it and it depends on neither, avoiding a circular import between them.
@@ -42,9 +46,10 @@ export function foldLogToLastKnownContent(log: Spin[]): Record<string, ContentSt
 							encoding: spin.payload.encoding ?? "utf8",
 							deleted: false,
 						};
-					} else if (spin.payload.diff !== undefined && prior?.content != null) {
+					} else if (spin.payload.diff !== undefined) {
+						const baseline = prior?.content != null && prior.encoding === "utf8" ? prior.content : "";
 						state[spin.payload.path] = {
-							content: applyDiff(prior.content, spin.payload.diff),
+							content: applyDiff(baseline, spin.payload.diff),
 							encoding: spin.payload.encoding ?? "utf8",
 							deleted: false,
 						};

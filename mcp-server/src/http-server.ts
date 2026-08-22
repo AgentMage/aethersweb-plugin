@@ -26,11 +26,18 @@ import type { Request, Response } from "express";
  * not the sole line of defense. It would not be adequate if this were ever exposed beyond the
  * tailnet.
  */
-export function startHttpServer(buildServer: () => McpServer, port: number, token: string): () => Promise<void> {
-	// Defaults to host "127.0.0.1", which is also what makes createMcpExpressApp attach its own
-	// DNS-rebinding-protection middleware (Host-header validation) — free defense in depth on top
-	// of the explicit 127.0.0.1 bind below.
-	const app = createMcpExpressApp();
+export function startHttpServer(
+	buildServer: () => McpServer,
+	port: number,
+	token: string,
+	allowedHosts: string[],
+): () => Promise<void> {
+	// allowedHosts drives createMcpExpressApp's DNS-rebinding-protection middleware (Host-header
+	// validation) explicitly, rather than relying on its host-based default — that default only
+	// covers the loopback address this process binds to (see the `.listen` call below), not the
+	// tailnet hostname `tailscale serve` forwards through when fronting this port. See
+	// config.ts's resolveHttpAllowedHosts for why both are needed.
+	const app = createMcpExpressApp({ allowedHosts });
 
 	const transports = new Map<string, StreamableHTTPServerTransport>();
 

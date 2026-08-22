@@ -44,6 +44,13 @@ network-layer auth is the first factor; the token is a second, scoped one), neve
 internet. **Do not use `tailscale funnel`** with this — that exposes it publicly, which this auth
 model isn't built for.
 
+Also set `AETHERSWEB_HTTP_ALLOWED_HOSTS` to your tailnet MagicDNS name (e.g.
+`mx.tail54a0a3.ts.net`; comma-separate for more than one). The server binds loopback-only, but
+`tailscale serve` forwards the original Host header through unchanged, and the SDK's DNS-rebinding
+protection rejects any Host it doesn't recognize by default — `127.0.0.1`/`localhost`/`::1` only.
+Without this set, every request routed through `tailscale serve` gets a 403 ("Invalid Host") before
+it ever reaches auth, i.e. the whole remote-access path silently doesn't work.
+
 In HTTP mode the server also runs a periodic reconciliation sweep across the whole vault (every
 `AETHERSWEB_RECONCILE_INTERVAL_MINUTES` minutes, default 5; `0` disables it) — the headless
 equivalent of the Obsidian plugin's own `reconcile()` timer, needed because a long-running HTTP

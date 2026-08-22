@@ -58,6 +58,29 @@ export function resolveHttpToken(): string {
 }
 
 /**
+ * The Host headers HTTP mode will accept, for the SDK's DNS-rebinding-protection middleware
+ * (`createMcpExpressApp`'s `allowedHosts`). That middleware defaults to allowing only
+ * `127.0.0.1`/`localhost`/`::1` — correct for a bare loopback listener, but this server is
+ * loopback-bound and then fronted by `tailscale serve`, which forwards the *original* Host header
+ * (the tailnet MagicDNS name) straight through. Left at the SDK default, every request arriving via
+ * Tailscale gets rejected with "Invalid Host" before it ever reaches auth or a tool call — the
+ * remote-access path this server exists for would silently never work. `AETHERSWEB_HTTP_ALLOWED_HOSTS`
+ * (comma-separated, e.g. `mx.tail54a0a3.ts.net`) adds the tailnet hostname(s) on top of the
+ * loopback defaults, which are always kept so local/direct requests still work too.
+ */
+export function resolveHttpAllowedHosts(): string[] {
+	const defaults = ["127.0.0.1", "localhost", "::1"];
+	const raw = process.env.AETHERSWEB_HTTP_ALLOWED_HOSTS;
+	if (!raw) return defaults;
+
+	const extra = raw
+		.split(",")
+		.map((host) => host.trim())
+		.filter((host) => host.length > 0);
+	return [...defaults, ...extra];
+}
+
+/**
  * How often HTTP mode's headless reconciliation sweep (reconcile-sweep.ts) walks the whole vault.
  * Defaults to 5 minutes — frequent enough to fold in a phone-side Syncthing sync within a few
  * minutes, not so frequent it's constantly re-hashing every file. `0` disables the sweep entirely.

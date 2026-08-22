@@ -11,7 +11,7 @@ import {
 } from "./core/statement";
 import { applyVerification, awaitsVerification, signatureStatus } from "./core/signature";
 import type { SignatureStatus, StatementSignature } from "./core/signature";
-import { buildNoteText, renderBody } from "./core/context-format";
+import { buildNoteText, extractStatementBlock, renderBody } from "./core/context-format";
 import { readHead, readLog } from "./log";
 import { hashFile, immediateFiles, immediateSubspaces, relativePath } from "./space";
 import type { ContextFileEntry, ContextFrontmatter, ContextSubspaceEntry, SpaceRef } from "./types";
@@ -113,11 +113,21 @@ async function regenerateContextLocked(ref: SpaceRef, app: App): Promise<void> {
 	// stringifyFrontmatter's exact quoted shape — cannot read. The result was silent: every context
 	// note this plugin ever regenerated became unparseable to the MCP server's
 	// check_staleness/plan_regeneration/write_statement, exactly the cross-package drift
-	// core/context-format.ts being shared code is supposed to rule out. Body (including the
-	// statement block) is preserved untouched by slicing it straight out of the current text.
+	// core/context-format.ts being shared code is supposed to rule out.
+	//
+	// Body is rebuilt from just the statement block (extractStatementBlock + renderBody), not
+	// sliced verbatim off whatever followed the first "---" — mirrors context-fs.ts's
+	// regenerateContextFs, and for the same reason: this plugin's own regen and the server's race
+	// on the same file with no cross-process lock (only the log has one), so a stale read here can
+	// land after an external write already replaced the file. Slicing raw text treats *everything*
+	// after the first frontmatter delimiter as opaque body, so a stale read that still carried an
+	// earlier stray frontmatter block preserved it forever, and each subsequent regen stacked one
+	// more "---...---" on top rather than replacing it — that's how a real context note ended up
+	// with three. Pulling out just the statement text is immune to that: it finds the real
+	// statement wherever it sits and discards everything else, so a note in that state repairs
+	// itself on the very next regen instead of accumulating.
 	const currentText = await app.vault.read(existingFile);
-	const fmBlockMatch = currentText.match(/^---\n[\s\S]*?\n---\n/);
-	const body = fmBlockMatch ? currentText.slice(fmBlockMatch[0].length) : currentText;
+	const body = renderBody(extractStatementBlock(currentText));
 	await app.vault.modify(existingFile, buildNoteText(frontmatter, body));
 }
 

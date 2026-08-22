@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,7 +12,7 @@ import { buildSpaceRefFs, hashFileFs, isSpaceFs } from "../src/space-fs";
 import { appendFileDeletedFs, appendSpinFs, ensureSpaceInitializedFs, readHeadFs, readLogFs } from "../src/vault-io";
 import { signatureStatus } from "../../src/core/signature";
 import { readSignedStatement, StatementContainmentError } from "../../src/core/statement";
-import { moveSpaceFs, recordWrittenFile, removeFileFs, writeFileFs, WriteError } from "../src/write-fs";
+import { deleteSpaceFs, moveSpaceFs, recordWrittenFile, removeFileFs, writeFileFs, WriteError } from "../src/write-fs";
 
 let vaultRoot: string;
 
@@ -201,6 +201,26 @@ describe("move_space", () => {
 		await expect(moveSpaceFs(vaultRoot, "UserSpace/Colorado", "UserSpace/Colorado/Nested"))
 			.rejects.toBeInstanceOf(WriteError);
 	});
+});
+
+describe("delete_space's layer", () => {
+	it("removes the folder and its whole .aether/ history with it", async () => {
+		await makeSpace("UserSpace");
+		const trinidad = await makeSpace("UserSpace/Trinidad");
+		await writeFileFs(vaultRoot, trinidad, "address.md", "1 Ranch Rd", "test-agent");
+
+		await deleteSpaceFs(vaultRoot, "UserSpace/Trinidad");
+		expect(await isSpaceFs(vaultRoot, "UserSpace/Trinidad")).toBe(false);
+		await expect(stat(trinidad.absPath)).rejects.toThrow();
+	});
+
+	it("refuses a path that is not a claimed space", async () => {
+		await makeSpace("UserSpace");
+		await expect(deleteSpaceFs(vaultRoot, "UserSpace/NoSuchSpace")).rejects.toBeInstanceOf(WriteError);
+	});
+
+	// The recursive / require_user_space gates are the tool layer's judgment call, not this
+	// function's — see delete-space.ts. This layer only ever does the deletion once told to.
 });
 
 describe("reconcile_space's layer", () => {

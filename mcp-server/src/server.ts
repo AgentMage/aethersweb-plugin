@@ -1,12 +1,19 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { resolveHttpPort, resolveHttpToken, resolveReconcileIntervalMinutes, resolveVaultRoot } from "./config";
+import {
+	resolveHttpAllowedHosts,
+	resolveHttpPort,
+	resolveHttpToken,
+	resolveReconcileIntervalMinutes,
+	resolveVaultRoot,
+} from "./config";
 import { startHttpServer } from "./http-server";
 import { startReconcileSweep } from "./reconcile-sweep";
 import { registerAppendSpinTool } from "./tools/append-spin";
 import { registerCheckStalenessTool } from "./tools/check-staleness";
 import { registerCreateSpaceTool } from "./tools/create-space";
+import { registerDeleteSpaceTool } from "./tools/delete-space";
 import { registerDescribeSpaceTool } from "./tools/describe-space";
 import { registerListSpacesTool } from "./tools/list-spaces";
 import { registerMoveFileTool } from "./tools/move-file";
@@ -48,6 +55,7 @@ export function buildServer(vaultRoot: string): McpServer {
 	// Authoring: perform a change and record it from what was actually written.
 	registerCreateSpaceTool(server, vaultRoot);
 	registerMoveSpaceTool(server, vaultRoot);
+	registerDeleteSpaceTool(server, vaultRoot);
 	registerWriteFileTool(server, vaultRoot);
 	registerDeleteFileTool(server, vaultRoot);
 	registerMoveFileTool(server, vaultRoot);
@@ -78,7 +86,7 @@ async function main(): Promise<void> {
 	// for the Tailscale + systemd setup this is meant to run under). resolveHttpToken throws
 	// rather than falling back to unauthenticated if the token env var is missing.
 	const token = resolveHttpToken();
-	startHttpServer(() => buildServer(vaultRoot), httpPort, token);
+	startHttpServer(() => buildServer(vaultRoot), httpPort, token, resolveHttpAllowedHosts());
 	startReconcileSweep(vaultRoot, resolveReconcileIntervalMinutes());
 	console.error(`[aethersweb-mcp-server] ready (http :${httpPort}), vault: ${vaultRoot}`);
 }

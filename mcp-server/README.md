@@ -96,6 +96,10 @@ person sees exactly what would be quarantined before confirming.
 - **`move_space`** — moves or renames a space, carrying its `.aether/` and so its whole history. The
   moved space's own log is untouched: its chain records what happened inside it, not where it sits.
   Both parents record the change in containment.
+- **`delete_space`** — permanently deletes a space's folder, `.aether/` log included: unlike
+  `delete_file`, nothing anywhere preserves what it held afterward, since a parent's log never
+  carries a child's hash. Refuses a space with live subspaces unless `recursive: true`, and a
+  top-level user-space unless `require_user_space: true`. No repair, no undo.
 - **`write_file`** / **`delete_file`** / **`move_file`** — change and record in one step.
   `write_file` writes **inside an `AETHERSWEB:STATEMENT` block**, so `content` is the AI-written
   *portion* of the file rather than the whole file: anything outside the block is left exactly as it

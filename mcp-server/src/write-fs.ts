@@ -211,3 +211,25 @@ export async function moveSpaceFs(
 	}
 	return { from, to, oldName, newName };
 }
+
+/**
+ * Permanently deletes a space's whole folder, `.aether/` log included — so its entire
+ * hash-chained history goes with it. There is no move-then-recreate to undo this with: unlike
+ * `removeFileFs`, whose content survives in the log via `file_deleted`, a space's own log is the
+ * thing being destroyed, and a parent's log never carries a child's hash in the first place (see
+ * SpinPayload's doc comment on subspace_created/subspace_removed) — so once this runs, nothing
+ * anywhere records what the space actually held, only that something by this name once existed.
+ *
+ * Deliberately low-level: whether the caller is allowed to take a subtree with it (recursive) or
+ * remove a top-level user-space at all (require_user_space) is a decision about someone's world,
+ * not a filesystem operation — that judgment stays in the tool layer, same split as move_space's
+ * "destination parent must already be a claimed space" living in move-space.ts rather than here.
+ */
+export async function deleteSpaceFs(vaultRoot: string, spacePath: string): Promise<SpaceRefFs> {
+	const ref = buildSpaceRefFs(vaultRoot, spacePath);
+	if (!(await isSpaceFs(vaultRoot, spacePath))) {
+		throw new WriteError(`"${spacePath}" is not a claimed space`);
+	}
+	await rm(ref.absPath, { recursive: true, force: true });
+	return ref;
+}

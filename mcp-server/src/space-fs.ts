@@ -109,6 +109,81 @@ export function relativePathFs(ref: SpaceRefFs, absFilePath: string): string {
 	return relative(ref.absPath, absFilePath).split(sep).join("/");
 }
 
+export interface TreeNode {
+	name: string;
+	path: string;
+	type: "folder" | "file";
+	/** Folders only: whether this folder is a claimed space (has .aether/log.jsonl). */
+	is_space?: boolean;
+	/** Files only. */
+	size?: number;
+	children?: TreeNode[];
+}
+
+export interface ListTreeResult {
+	tree: TreeNode[];
+	/** True when MAX_TREE_ENTRIES was hit and the walk stopped early. */
+	truncated: boolean;
+}
+
+const MAX_TREE_ENTRIES = 2000;
+
+/**
+ * Raw filesystem shape rooted at `under`, no space semantics — unlike walkSpacesFs, which only
+ * ever yields claimed spaces. Each folder is marked `is_space` so a caller can tell a claimed
+ * space from a plain folder (one waiting on create_space, say) without a second call per entry.
+ */
+export async function listTreeFs(
+	vaultRoot: string,
+	under: string,
+	options: { maxDepth?: number; includeIgnored?: boolean } = {},
+): Promise<ListTreeResult> {
+	const { maxDepth, includeIgnored = false } = options;
+	let entryCount = 0;
+	let truncated = false;
+
+	async function walk(relPath: string, depth: number): Promise<TreeNode[]> {
+		if (truncated) return [];
+		const entries = await readdir(join(vaultRoot, relPath), { withFileTypes: true });
+		entries.sort((a, b) => a.name.localeCompare(b.name));
+
+		const out: TreeNode[] = [];
+		for (const entry of entries) {
+			if (!includeIgnored && isIgnoredName(entry.name)) continue;
+			if (entryCount >= MAX_TREE_ENTRIES) {
+				truncated = true;
+				break;
+			}
+			entryCount++;
+
+			const childRel = relPath ? `${relPath}/${entry.name}` : entry.name;
+			if (entry.isDirectory()) {
+				const node: TreeNode = {
+					name: entry.name,
+					path: childRel,
+					type: "folder",
+					is_space: await isSpaceFs(vaultRoot, childRel),
+				};
+				if (maxDepth === undefined || depth < maxDepth) {
+					node.children = await walk(childRel, depth + 1);
+				}
+				out.push(node);
+			} else if (entry.isFile()) {
+				out.push({
+					name: entry.name,
+					path: childRel,
+					type: "file",
+					size: (await stat(join(vaultRoot, childRel))).size,
+				});
+			}
+		}
+		return out;
+	}
+
+	const tree = await walk(under, 1);
+	return { tree, truncated };
+}
+
 function extensionOf(absFilePath: string): string {
 	const base = absFilePath.split("/").pop() ?? absFilePath;
 	const dotIdx = base.lastIndexOf(".");

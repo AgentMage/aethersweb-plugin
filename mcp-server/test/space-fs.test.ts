@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildSpaceRefFs, immediateFilesFs, isSpaceFs, walkSpacesFs } from "../src/space-fs";
+import { buildSpaceRefFs, immediateFilesFs, isSpaceFs, listTreeFs, walkSpacesFs } from "../src/space-fs";
 
 let vaultRoot: string;
 
@@ -51,5 +51,44 @@ describe("space-fs.ts", () => {
 		const files = await immediateFilesFs(ref);
 
 		expect(files).toEqual([join(vaultRoot, "UserSpace", "notes.md")]);
+	});
+
+	describe("listTreeFs", () => {
+		it("shows the raw tree — plain folders included — marking which folders are claimed spaces", async () => {
+			await claimSpace("UserSpace");
+			await writeFile(join(vaultRoot, "UserSpace", "notes.md"), "hello");
+			await mkdir(join(vaultRoot, "UserSpace", "NotYetASpace"), { recursive: true });
+
+			const { tree, truncated } = await listTreeFs(vaultRoot, "");
+			expect(truncated).toBe(false);
+
+			const userSpace = tree.find((n) => n.name === "UserSpace");
+			expect(userSpace).toMatchObject({ type: "folder", is_space: true });
+			expect(userSpace?.children?.map((c) => c.name).sort()).toEqual(["NotYetASpace", "notes.md"]);
+			expect(userSpace?.children?.find((c) => c.name === "NotYetASpace")).toMatchObject({
+				type: "folder",
+				is_space: false,
+			});
+			expect(userSpace?.children?.find((c) => c.name === "notes.md")).toMatchObject({ type: "file", size: 5 });
+		});
+
+		it("omits dotted paths by default and includes them with includeIgnored", async () => {
+			await claimSpace("UserSpace");
+
+			const hidden = await listTreeFs(vaultRoot, "");
+			expect(hidden.tree.find((n) => n.name === "UserSpace")?.children).toEqual([]);
+
+			const shown = await listTreeFs(vaultRoot, "", { includeIgnored: true });
+			expect(shown.tree.find((n) => n.name === "UserSpace")?.children?.map((c) => c.name)).toEqual([".aether"]);
+		});
+
+		it("stops descending past maxDepth", async () => {
+			await mkdir(join(vaultRoot, "A", "B", "C"), { recursive: true });
+
+			const { tree } = await listTreeFs(vaultRoot, "", { maxDepth: 2 });
+			const a = tree.find((n) => n.name === "A");
+			const b = a?.children?.find((n) => n.name === "B");
+			expect(b?.children).toBeUndefined();
+		});
 	});
 });

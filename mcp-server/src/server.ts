@@ -16,6 +16,7 @@ import { registerCreateSpaceTool } from "./tools/create-space";
 import { registerDeleteSpaceTool } from "./tools/delete-space";
 import { registerDescribeSpaceTool } from "./tools/describe-space";
 import { registerListSpacesTool } from "./tools/list-spaces";
+import { registerListTreeTool } from "./tools/list-tree";
 import { registerMoveFileTool } from "./tools/move-file";
 import { registerMoveSpaceTool } from "./tools/move-space";
 import { registerPlanRegenerationTool } from "./tools/plan-regeneration";
@@ -42,6 +43,7 @@ export function buildServer(vaultRoot: string): McpServer {
 
 	// Read: what the vault is and where things sit.
 	registerListSpacesTool(server, vaultRoot);
+	registerListTreeTool(server, vaultRoot);
 	registerDescribeSpaceTool(server, vaultRoot);
 	registerReadFileTool(server, vaultRoot);
 	registerReadLogTool(server, vaultRoot);

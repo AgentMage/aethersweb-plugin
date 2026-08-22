@@ -67,6 +67,10 @@ root comes from server config, never from a tool call.
 
 - **`list_spaces`** — every claimed space, optionally scoped `under` a subtree. Each entry carries
   its parent, depth, head and counts, so the tree reads straight off the response.
+- **`list_tree`** — the raw filesystem tree under a path, no space semantics or hashing: folders and
+  files as they actually sit on disk, each folder marked `is_space`. For orienting in an unfamiliar
+  vault or checking what a bulk drop-in contains before deciding what to `create_space` over.
+  Dotted paths are omitted by default (`include_ignored: true` to see them).
 - **`describe_space`** — the primary read. A space's files, head and current statement *together
   with* its parent, siblings and subspaces, plus staleness. This is where a statement's two required
   halves — what a space is, and where it sits — are read from in one call.

@@ -11,16 +11,17 @@ export function registerCheckStalenessTool(server: McpServer, vaultRoot: string)
 		{
 			title: "Check context staleness",
 			description:
-				"For every space (optionally scoped `under` a subtree), compares its context note's " +
-				"recorded source_tip/statement_tip against its actual current log head, and each " +
-				"recorded subspace tip against that subspace's own actual current head, to report " +
-				"what needs regenerate_context or write_statement. Read-only — flags staleness, " +
-				"never fixes it.\n\n" +
-				"statement_stale is the raw fact (does statement_tip differ from current_head at " +
-				"all); statement_drift is the judgment on top of it — whether the spins since the " +
-				"last statement are actually worth a write_statement call, or just a trivial edit or " +
-				"two not yet worth bothering anyone about. plan_regeneration is the tree-aware, " +
-				"drift-filtered counterpart if you want only the spaces that cross that bar.",
+				"For every space (optionally scoped `under` a subtree), compares its machine index's " +
+				"recorded source_tip — and the statement's own signature at_tip — against its actual " +
+				"current log head, and each recorded subspace tip against that subspace's own actual " +
+				"current head, to report what needs regenerate_context or write_statement. Read-only " +
+				"— flags staleness, never fixes it.\n\n" +
+				"statement_stale is a fact, not a recommendation: it is true the moment a single spin " +
+				"lands after the statement was written. statement_drift carries what actually piled " +
+				"up (spin count, and whether any of it changed the space's composition). Deciding " +
+				"whether that is worth a write_statement call is yours — read the log and see what " +
+				"changed rather than going by the count alone. plan_regeneration is the tree-aware " +
+				"counterpart, sorted deepest-first.",
 			inputSchema: {
 				under: z
 					.string()

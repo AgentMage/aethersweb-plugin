@@ -18,11 +18,11 @@ function yamlScalar(v: string | number | null): string {
 }
 
 /**
- * Hand-rolled, deterministic YAML for the fixed context-note frontmatter shape — used by both the
- * Obsidian plugin (every write, not only a brand-new note — see context.ts) and the MCP server,
- * which has no Obsidian YAML serializer to defer to anyway. Both sides writing this exact shape,
- * rather than the plugin deferring to Obsidian's own frontmatter serializer for updates, is what
- * keeps every context note parseable by parseFrontmatter regardless of which side last touched it.
+ * Hand-rolled, deterministic YAML for the fixed machine-index shape (`.aether/index.md`) — used by
+ * both the Obsidian plugin (see context.ts) and the MCP server, which has no Obsidian YAML
+ * serializer to defer to anyway. Both sides writing this exact shape, rather than the plugin
+ * deferring to Obsidian's own frontmatter serializer, is what keeps every index parseable by
+ * parseFrontmatter regardless of which side last touched it.
  */
 export function stringifyFrontmatter(fm: ContextFrontmatter): string {
 	const lines: string[] = [];
@@ -54,7 +54,6 @@ export function stringifyFrontmatter(fm: ContextFrontmatter): string {
 		}
 	}
 
-	lines.push(`statement_tip: ${yamlScalar(fm.statement_tip)}`);
 	return lines.join("\n");
 }
 
@@ -148,8 +147,6 @@ export function parseFrontmatter(noteText: string): ContextFrontmatter | null {
 		throw new Error(`parseFrontmatter: subspace_count (${subspace_count}) does not match ${subspaces.length} subspaces entries`);
 	}
 
-	const statement_tip = asNullableString(scalar("statement_tip"));
-
 	return {
 		aetherweb_schema,
 		space_path,
@@ -159,7 +156,6 @@ export function parseFrontmatter(noteText: string): ContextFrontmatter | null {
 		subspace_count,
 		files,
 		subspaces,
-		statement_tip,
 	};
 }
 
@@ -174,14 +170,17 @@ export function extractStatementBlock(noteText: string): string {
 }
 
 /**
- * A context note's body: one statement block. Takes raw block contents (which for an already-signed
- * note include its signature), so this is the carry-forward path — new AI text is written through
- * `statement.ts`'s signing functions instead, which validate and attribute it.
+ * A brand-new folder note's starting body: one statement block. Takes raw block contents (which
+ * for an already-signed note include its signature), so this is the carry-forward path — new AI
+ * text is written through `statement.ts`'s signing functions instead, which validate and attribute
+ * it. Only used at creation now; an existing folder note is never rebuilt from its parts, since
+ * everything outside the block belongs to the person who wrote it.
  */
 export function renderBody(statementText: string): string {
 	return `\n${wrapPreservedBlockBody(statementText)}`;
 }
 
-export function buildNoteText(fm: ContextFrontmatter, body: string): string {
-	return `---\n${stringifyFrontmatter(fm)}\n---\n${body}`;
+/** The full text of a space's `.aether/index.md`. Frontmatter only — the index has no body. */
+export function buildIndexText(fm: ContextFrontmatter): string {
+	return `---\n${stringifyFrontmatter(fm)}\n---\n`;
 }

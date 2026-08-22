@@ -1,5 +1,5 @@
 import { App, normalizePath, TFile, TFolder } from "obsidian";
-import { AETHER_DIR, BINARY_EXTENSIONS, HEAD_FILE, LOG_FILE } from "./core/constants";
+import { AETHER_DIR, BINARY_EXTENSIONS, HEAD_FILE, INDEX_FILE, LOG_FILE } from "./core/constants";
 import { sha256Hex, sha256HexBytes } from "./core/hash";
 import { isIgnoredPath, parentPathOf } from "./core/ignore";
 import type { SpaceRef } from "./types";
@@ -12,6 +12,7 @@ export function buildSpaceRef(folder: TFolder): SpaceRef {
 		aetherDir,
 		logPath: normalizePath(`${aetherDir}/${LOG_FILE}`),
 		headPath: normalizePath(`${aetherDir}/${HEAD_FILE}`),
+		indexPath: normalizePath(`${aetherDir}/${INDEX_FILE}`),
 		contextPath: normalizePath(`${folder.path}/${folder.name}.md`),
 	};
 }
@@ -42,11 +43,17 @@ export function walkSpaces(app: App): AsyncGenerator<SpaceRef> {
 	return walkFolder(app.vault.getRoot(), app);
 }
 
-/** Direct file children of a space, excluding its own context note and anything ignorable. */
+/**
+ * Direct file children of a space, excluding anything ignorable.
+ *
+ * The folder note is deliberately *included*. It used to be excluded as a derived artifact, but
+ * now that the machine index lives in `.aether/index.md` the folder note is an ordinary note a
+ * person writes in — so leaving it out would mean reconciliation never notices their own edits to
+ * it (made with Obsidian closed, or arriving via a sync client), which is exactly how a log and
+ * its filesystem drift apart.
+ */
 export function immediateFiles(ref: SpaceRef): TFile[] {
-	return ref.folder.children.filter(
-		(c): c is TFile => c instanceof TFile && c.path !== ref.contextPath && !isIgnoredPath(c.path),
-	);
+	return ref.folder.children.filter((c): c is TFile => c instanceof TFile && !isIgnoredPath(c.path));
 }
 
 /**

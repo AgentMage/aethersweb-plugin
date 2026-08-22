@@ -78,22 +78,27 @@ root comes from server config, never from a tool call.
   it is.
 - **`read_log`** — what actually happened. Metadata by default; `include_content` adds the recorded
   content and diffs, which is what lets you reconstruct a file at any point.
-- **`read_context`** — the raw context note, frontmatter and statement split.
+- **`read_context`** — a space's machine index (`.aether/index.md`) as raw YAML, the statement and
+  its signature split apart, and `note_text`: the person's own folder-note writing with the AI
+  block stripped out.
 
 ### Integrity — report, never fix
 
 - **`verify_chain`** — walks a log confirming the chain is unbroken.
-- **`check_staleness`** — compares each context's recorded tips against actual heads.
+- **`check_staleness`** — compares each index's `source_tip`, and each statement's signature
+  `at_tip`, against actual heads.
 - **`plan_regeneration`** — the same check, filtered to what is stale and sorted deepest-first so
   every subspace is planned before its parent. Depth-descending is valid because containment is
-  strictly single-parent. Read-only: it tells the calling agent what to do, in what order.
+  strictly single-parent. Read-only, and deliberately unfiltered on the statement side: it reports
+  `statement_stale` plus the raw drift facts and leaves "is this worth a call" to the agent, which
+  can read the log and see what actually changed rather than going by a spin count.
 
 Chain **repair** is intentionally not exposed. Only the plugin's own GUI repairs a chain, where a
 person sees exactly what would be quarantined before confirming.
 
 ### Authoring
 
-- **`create_space`** — folder, log seeded with `space_created`, context note, and the parent told it
+- **`create_space`** — folder, log seeded with `space_created`, index and folder note, and the parent told it
   has a new child. The parent must already be a claimed space. Creating a *top-level user-space*
   additionally requires `require_user_space: true` — that is the centre of someone's world, not a
   folder.
@@ -115,12 +120,16 @@ person sees exactly what would be quarantined before confirming.
 
 ### Derived and catch-up
 
-- **`regenerate_context`** — rebuilds objective frontmatter from filesystem truth; never touches the
-  statement body.
-- **`write_statement`** — writes statement text and stamps `statement_tip`. Bypasses the log
-  entirely: a statement is non-authoritative. Pass `expect_tip` with the head you read before
-  generating, and the write is refused if the space moved on meanwhile — otherwise a slow generation
-  stamps as current a statement that never saw the changes it now claims to cover.
+- **`regenerate_context`** — rebuilds the machine index (`.aether/index.md`) from filesystem truth.
+  Never logged and never settles into the log — that placement is what keeps `source_tip`/
+  `generated_at` from chasing their own writes. Touches the folder note only to create it when
+  absent (or strip a pre-split note's leftover frontmatter); everything else there is the person's.
+- **`write_statement`** — writes statement text into the folder note's marked block, preserving
+  every byte the person wrote around it, and records the write as an ordinary `file_modified`. The
+  tip it was generated against lives in the signature's `at_tip`, not a separate field. Pass
+  `expect_tip` with the head you read before generating, and the write is refused if the space
+  moved on meanwhile — otherwise a slow generation signs as current a statement that never saw the
+  changes it now claims to cover.
 - **`reconcile_space`** — the server's own catch-up pass, since the plugin's only runs inside
   Obsidian. Emits `detected` spins for anything that drifted. Never infers renames.
 - **`append_spin`** — a narrow escape hatch. It writes what it is told, so anything it records is a

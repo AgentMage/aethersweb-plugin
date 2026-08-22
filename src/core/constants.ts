@@ -5,6 +5,12 @@ export const AETHER_DIR = ".aether";
 export const LOG_FILE = "log.jsonl";
 export const HEAD_FILE = "head";
 /**
+ * The machine index: a space's objective content list (files, hashes, subspace tips, counts).
+ * Lives here rather than in the folder note for the same reason `head` does — it is derived from
+ * the log, rewritten on every spin, and never logged itself. The folder note is the person's.
+ */
+export const INDEX_FILE = "index.md";
+/**
  * Cross-process advisory lock. Both writers — the Obsidian plugin's `log.ts` and the MCP server's
  * `lock.ts` — acquire this exclusive-create file before their read-tail/append/write-head sequence.
  * It is only meaningful because *both* honor it; a writer that skips it can still fork a chain.
@@ -13,8 +19,12 @@ export const LOCK_FILE = ".lock";
 /** A lock file older than this is treated as abandoned by a crashed holder and broken. */
 export const STALE_LOCK_MS = 30_000;
 
-/** Current context-note frontmatter schema version. Bump on breaking frontmatter shape changes. */
-export const CONTEXT_SCHEMA_VERSION = 1;
+/**
+ * Current machine-index schema version. Bump on breaking frontmatter shape changes.
+ * v2: the index moved out of the folder note into `.aether/index.md` and dropped `statement_tip`
+ * (what a statement was generated against now lives in its own signature's `at_tip`).
+ */
+export const CONTEXT_SCHEMA_VERSION = 2;
 
 /** Sentinel markers delimiting the AI state statement inside a context note's body. */
 export const STATEMENT_START_MARKER = "<!-- AETHERWEB:STATEMENT:START -->";

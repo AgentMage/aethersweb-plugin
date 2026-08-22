@@ -20,23 +20,23 @@ export function registerPlanRegenerationTool(server: McpServer, vaultRoot: strin
 			title: "Plan a bottom-up regeneration order",
 			description:
 				"Runs the same staleness check as check_staleness (optionally scoped `under` a " +
-				"subtree), but returns only the spaces that actually need work, sorted deepest-first " +
+				"subtree), but returns only the spaces with something stale, sorted deepest-first " +
 				"so every subspace is planned before its own parent.\n\n" +
 				"regenerate_context is mechanically order-independent — it always reads each " +
 				"subspace's actual current head straight off disk, never off that subspace's own " +
-				"context note. Order matters for write_statement instead: a parent's statement " +
+				"index. Order matters for write_statement instead: a parent's statement " +
 				"places the space in the context of its universe and composition (see " +
 				"write_statement's description), which reads better once the children it's reading " +
 				"about already carry fresh statements rather than ones about to be rewritten anyway.\n\n" +
-				"needs_write_statement is a judgment, not just a tip mismatch: a space whose " +
-				"statement is only a handful of routine edits behind is left out of the plan " +
-				"entirely — the point of a threshold is that trivial drift never shows up here " +
-				"at all, so every space that does appear is worth the write_statement call. A " +
-				"subspace appearing or vanishing, or no statement ever having been written, " +
-				"always crosses it regardless of count.\n\n" +
+				"statement_stale is reported raw, not pre-filtered: it is true the moment one spin " +
+				"lands after the statement was written, so a space one trivial edit behind appears " +
+				"here too. Weigh statement_drift yourself — a composition change (a subspace " +
+				"appearing or vanishing) or no statement ever written is always worth the call; a " +
+				"pile of routine edits may not be, and read_log tells you which you have far better " +
+				"than the count does.\n\n" +
 				"Walk the returned plan in order and, per entry, call regenerate_context when " +
-				"needs_regenerate_context is true and write_statement when needs_write_statement is " +
-				"true — `reasons` explains what triggered each.",
+				"needs_regenerate_context is true, and write_statement where you judge the drift " +
+				"worth it — `reasons` explains what changed.",
 			inputSchema: {
 				under: z
 					.string()

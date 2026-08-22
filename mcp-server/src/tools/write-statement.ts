@@ -10,8 +10,9 @@ import { fail, notASpace, ok, SPACE_PATH_DESC } from "./helpers";
  * Not one of Spec.md's literal 5 tools, but Spec.md separately says the AI statement is "written
  * through this same server" — this is that write path, mirroring context.ts::writeStatement
  * (already documented there as "the future drop-in point for the MCP server / statement
- * generator"). Deliberately bypasses the log entirely: a statement is a non-authoritative,
- * disposable annotation, not a replayable file event, so it has no business becoming a SpinType.
+ * generator"). No new SpinType: the write is recorded as an ordinary `file_modified` on the folder
+ * note, because that note is an ordinary file a person also writes in. What makes the statement
+ * distinguishable from their words is containment and the signature, not a special log entry.
  *
  * The tool description below is deliberately operational only — what to read first, what a
  * statement must contain, what it must not do — and deliberately carries none of CLAUDE.md's
@@ -29,9 +30,10 @@ export function registerWriteStatementTool(server: McpServer, vaultRoot: string)
 		{
 			title: "Write a space's AI state statement",
 			description:
-				"Writes new AI-generated statement text into a space's context note (between the " +
-				"sentinel markers) and stamps statement_tip. Does not touch the objective frontmatter " +
-				"and does not append a spin — the statement is derived/disposable, not authoritative.\n\n" +
+				"Writes new AI-generated statement text into a space's folder note (between the " +
+				"sentinel markers). Everything outside that block is the person's own writing about the " +
+				"space and is preserved byte for byte — read it, take it seriously, and never " +
+				"contradict it silently.\n\n" +
 				"Before generating: call read_context on this space, then read the parent's context " +
 				"and list_spaces around it (siblings, subspaces). Do not generate from this space's " +
 				"own context alone.\n\n" +
@@ -40,7 +42,7 @@ export function registerWriteStatementTool(server: McpServer, vaultRoot: string)
 				"Do not invent content to fill a gap.\n" +
 				"- WHERE it is — its position among its parent, siblings, and subspaces. Do not write " +
 				"it as if the space stood alone.\n\n" +
-				"The frontmatter next to this text already carries the cold facts — file list, hashes, " +
+				"The machine index already carries the cold facts — file list, hashes, " +
 				"counts, diffs — so do not restate that report. Where the data is thin, silent, or has " +
 				"drifted from what a sibling space already records, state that plainly as part of the " +
 				"content: an unresolved gap is itself something to report, not something to fill in or " +
@@ -71,7 +73,7 @@ export function registerWriteStatementTool(server: McpServer, vaultRoot: string)
 			const currentHead = await readHeadFs(ref);
 
 			// Compare-and-swap on the head. Without it, a generation that takes a while — which is
-			// every real one — can stamp statement_tip with a head reached *after* the text was
+			// every real one — can sign the statement with a head reached *after* the text was
 			// written, marking as current a statement that never saw the changes it now claims to
 			// cover. Silent, and precisely inverted from the truth staleness exists to report.
 			if (expect_tip !== undefined && expect_tip !== currentHead) {
@@ -84,17 +86,17 @@ export function registerWriteStatementTool(server: McpServer, vaultRoot: string)
 
 			const atTip = at_tip ?? currentHead;
 			if (atTip === null) {
-				return fail(`Space "${space_path}" has no log entries yet — nothing to stamp statement_tip against.`);
+				return fail(`Space "${space_path}" has no log entries yet — nothing to sign a statement against.`);
 			}
 			try {
-				await writeStatementFs(ref, text, atTip, agent);
+				await writeStatementFs(vaultRoot, ref, text, atTip, agent);
 			} catch (err) {
 				if (err instanceof StatementContainmentError) return fail(err.message);
 				throw err;
 			}
 			return ok({
 				ok: true,
-				statement_tip: atTip,
+				at_tip: atTip,
 				signed_by: agent,
 				verification:
 					"not required — a statement is derived from the log and regenerated with it, so " +

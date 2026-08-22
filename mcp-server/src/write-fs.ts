@@ -201,13 +201,25 @@ export async function moveSpaceFs(
 	await mkdir(dirname(to.absPath), { recursive: true });
 	await rename(from.absPath, to.absPath);
 
-	// The context note is a folder note: its filename is the folder's name, so a rename leaves it
-	// stranded under the old one. Obsidian's own rename handler does the same repair (events.ts).
+	// The folder note's filename is the folder's name, so a rename leaves it stranded under the old
+	// one. Obsidian's own rename handler does the same repair (events.ts).
 	const oldName = fromPath.split("/").pop() ?? fromPath;
 	const newName = toPath.split("/").pop() ?? toPath;
 	if (oldName !== newName) {
 		const stranded = join(to.absPath, `${oldName}.md`);
-		if (await exists(stranded)) await rename(stranded, to.contextPath);
+		if (await exists(stranded)) {
+			await rename(stranded, to.contextPath);
+			// Recorded, even though a space's move never otherwise touches its own log: this is not
+			// the move being recorded, it is a file *inside* the space changing its relative path,
+			// which is squarely this log's business. Leaving it out would have the log naming a file
+			// that is no longer there, and the next reconciliation would "repair" that with a
+			// spurious delete-plus-create pair.
+			await appendSpinGuardedFs(to, () => ({
+				spin_type: "file_renamed",
+				source: "observed",
+				payload: { old_path: `${oldName}.md`, path: `${newName}.md` },
+			}));
+		}
 	}
 	return { from, to, oldName, newName };
 }

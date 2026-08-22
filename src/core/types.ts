@@ -106,6 +106,19 @@ export interface ContextSubspaceEntry {
 	tip: string | null;
 }
 
+/**
+ * The machine index written to `.aether/index.md` — a space's objective content list, derived
+ * wholly from the log and the filesystem.
+ *
+ * It lives inside `.aether/` for the same reason `.aether/head` does: it is a cache of what the
+ * log already says, not content, so it is rewritten freely on every spin and never logged. That
+ * placement is what keeps it out of the circularity it would otherwise sit in — `source_tip` and
+ * `generated_at` change purely as a side effect of writing, so a logged index could never settle.
+ *
+ * Deliberately carries no `statement_tip`: what the AI statement was generated against is
+ * recorded in the statement's own signature (`at_tip`, core/signature.ts), which travels with the
+ * prose it describes instead of in a separate field that can fall out of sync with it.
+ */
 export interface ContextFrontmatter {
 	aetherweb_schema: number;
 	space_path: string;
@@ -115,6 +128,4 @@ export interface ContextFrontmatter {
 	subspace_count: number;
 	files: ContextFileEntry[];
 	subspaces: ContextSubspaceEntry[];
-	/** Tip the AI statement body was last generated against. Null = never generated. */
-	statement_tip: string | null;
 }

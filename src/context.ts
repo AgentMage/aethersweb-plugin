@@ -1,6 +1,6 @@
 import { App, TFile } from "obsidian";
 import { CONTEXT_SCHEMA_VERSION, DEFAULT_STATEMENT_PLACEHOLDER } from "./core/constants";
-import { assessStatementDrift, spinsSinceTip } from "./core/drift";
+import { assessStatementDrift, spinsSinceStatement } from "./core/drift";
 import type { StatementDriftAssessment } from "./core/drift";
 import {
 	findStatementBlock,
@@ -11,16 +11,16 @@ import {
 } from "./core/statement";
 import { applyVerification, awaitsVerification, signatureStatus } from "./core/signature";
 import type { SignatureStatus, StatementSignature } from "./core/signature";
-import { buildNoteText, extractStatementBlock, renderBody } from "./core/context-format";
+import { buildIndexText, parseFrontmatter, renderBody } from "./core/context-format";
+import { recordFileContentSpin } from "./content-record";
 import { readHead, readLog } from "./log";
 import { hashFile, immediateFiles, immediateSubspaces, relativePath } from "./space";
 import type { ContextFileEntry, ContextFrontmatter, ContextSubspaceEntry, SpaceRef } from "./types";
 
 /**
- * Serializes context regeneration per space. Regenerating is a read-modify-write on a whole file
- * (read the current text, rebuild frontmatter, write the whole thing back); two of those
- * interleaved on the same note (a debounced modify landing while a rename regenerates, say) can
- * lose one side's rebuild entirely. Unrelated spaces never wait on each other.
+ * Serializes index regeneration per space. Regenerating rebuilds the whole index file from current
+ * truth; two of those interleaved on the same space (a debounced modify landing while a rename
+ * regenerates, say) can lose one side's rebuild entirely. Unrelated spaces never wait on each other.
  */
 const contextLocks = new Map<string, Promise<unknown>>();
 
@@ -32,39 +32,40 @@ function withContextLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Reads the statement tip a context note already carries, straight from the file's own text.
+ * Reads the tip a space's statement was last generated against, from the statement's own signature.
  *
- * Deliberately not `metadataCache.getFileCache` — that is a cache, and it is empty or stale in
- * exactly the situations regeneration runs in: a note created moments ago, a note just renamed by
- * the folder-rename handler, a startup pass racing the initial index. A miss there reads as
- * `statement_tip: null`, which doesn't fail loudly; it silently reports every statement in the
- * vault as never-generated, and the next write stamps over a tip that was fine.
+ * The signature is the authority here rather than a separate stored field: `at_tip` travels with
+ * the prose it describes, so it cannot fall out of sync with it. It also means a person editing
+ * their own writing elsewhere in the folder note never looks like statement drift — only the
+ * statement's own regeneration moves this value.
  */
 async function readStatementTip(contextPath: string, app: App): Promise<string | null> {
 	const file = app.vault.getAbstractFileByPath(contextPath);
 	if (!(file instanceof TFile)) return null;
-	const text = await app.vault.read(file);
-	const fmMatch = text.match(/^---\n([\s\S]*?)\n---/);
-	if (!fmMatch) return null;
-	const line = fmMatch[1].split("\n").find((l) => l.startsWith("statement_tip:"));
-	if (!line) return null;
-	const raw = line.slice("statement_tip:".length).trim();
-	if (raw === "" || raw === "null" || raw === "~") return null;
-	return raw.replace(/^["']|["']$/g, "");
+	return readSignedStatement(await app.vault.read(file))?.signature?.at_tip ?? null;
 }
 
 /**
- * Rebuilds a space's context note: frontmatter is fully reconstructed from current filesystem
- * truth (this space's own files + each direct subspace's recorded tip) — never patched
- * incrementally, so the note stays fully disposable/regenerable. The AI statement body (between
- * the sentinel markers) and its `statement_tip` are read back and carried forward verbatim;
- * this function never writes statement content — that's the future MCP server's job.
+ * Rebuilds a space's machine index (`.aether/index.md`) from current filesystem truth — this
+ * space's own files plus each direct subspace's recorded tip. Fully reconstructed every time,
+ * never patched incrementally: the index is derived and disposable, the log is authoritative.
+ *
+ * Writes nothing to the folder note and appends nothing to the log. That is what lets this run
+ * unconditionally after every spin without chasing its own tail — the index records `source_tip`
+ * and `generated_at`, both of which change purely as a side effect of writing, so an index that
+ * were itself logged could never settle. Living in `.aether/` (like `head`, for the same reason)
+ * is what keeps it out of that loop entirely.
  */
 export function regenerateContext(ref: SpaceRef, app: App): Promise<void> {
-	return withContextLock(ref.contextPath, () => regenerateContextLocked(ref, app));
+	return withContextLock(ref.indexPath, () => regenerateContextLocked(ref, app));
 }
 
 async function regenerateContextLocked(ref: SpaceRef, app: App): Promise<void> {
+	// Before the index is built, not after: creating the folder note records a spin, so doing it
+	// first means the index below is written against the head that already includes it. The other
+	// order leaves the index a step behind its own space from the moment a space is created.
+	await ensureFolderNote(ref, app);
+
 	const head = await readHead(ref, app);
 
 	const files: ContextFileEntry[] = [];
@@ -82,10 +83,6 @@ async function regenerateContextLocked(ref: SpaceRef, app: App): Promise<void> {
 		subspaces.push({ name: sub.folder.name, tip: await readHead(sub, app) });
 	}
 
-	const existing = app.vault.getAbstractFileByPath(ref.contextPath);
-	const existingFile = existing instanceof TFile ? existing : null;
-	const statementTip = existingFile ? await readStatementTip(ref.contextPath, app) : null;
-
 	const frontmatter: ContextFrontmatter = {
 		aetherweb_schema: CONTEXT_SCHEMA_VERSION,
 		space_path: ref.path,
@@ -95,50 +92,65 @@ async function regenerateContextLocked(ref: SpaceRef, app: App): Promise<void> {
 		subspace_count: subspaces.length,
 		files,
 		subspaces,
-		statement_tip: statementTip,
 	};
 
-	if (!existingFile) {
-		const body = renderBody(DEFAULT_STATEMENT_PLACEHOLDER);
-		await app.vault.create(ref.contextPath, buildNoteText(frontmatter, body));
-		return;
-	}
-
-	// Full rebuild, not a patch — matches "objective content list regenerates on every change".
-	// Written as raw text via stringifyFrontmatter/buildNoteText (through app.vault.modify) rather
-	// than app.fileManager.processFrontMatter: processFrontMatter always re-serializes the *entire*
-	// frontmatter block from Obsidian's own object model, even to change one field, and Obsidian's
-	// YAML writer drops quotes around plain scalars (a bare `space_path` or `generated_at`) that
-	// core/context-format.ts's parseFrontmatter — deliberately a strict, non-general parser tied to
-	// stringifyFrontmatter's exact quoted shape — cannot read. The result was silent: every context
-	// note this plugin ever regenerated became unparseable to the MCP server's
-	// check_staleness/plan_regeneration/write_statement, exactly the cross-package drift
-	// core/context-format.ts being shared code is supposed to rule out.
-	//
-	// Body is rebuilt from just the statement block (extractStatementBlock + renderBody), not
-	// sliced verbatim off whatever followed the first "---" — mirrors context-fs.ts's
-	// regenerateContextFs, and for the same reason: this plugin's own regen and the server's race
-	// on the same file with no cross-process lock (only the log has one), so a stale read here can
-	// land after an external write already replaced the file. Slicing raw text treats *everything*
-	// after the first frontmatter delimiter as opaque body, so a stale read that still carried an
-	// earlier stray frontmatter block preserved it forever, and each subsequent regen stacked one
-	// more "---...---" on top rather than replacing it — that's how a real context note ended up
-	// with three. Pulling out just the statement text is immune to that: it finds the real
-	// statement wherever it sits and discards everything else, so a note in that state repairs
-	// itself on the very next regen instead of accumulating.
-	const currentText = await app.vault.read(existingFile);
-	const body = renderBody(extractStatementBlock(currentText));
-	await app.vault.modify(existingFile, buildNoteText(frontmatter, body));
+	// Written straight through the adapter, not the vault API: `.aether/` is Obsidian-ignored, so
+	// there is no TFile to hand app.vault.modify and nothing indexes this path.
+	await app.vault.adapter.write(ref.indexPath, buildIndexText(frontmatter));
 }
 
 /**
- * Writes AI statement text into a context note and stamps statement_tip, without touching the
- * objective frontmatter above. The plugin-side mirror of the MCP server's `write_statement`.
+ * Makes sure the folder note exists and carries a statement block — and, for a note written before
+ * the index moved into `.aether/`, strips the now-obsolete frontmatter it still carries.
  *
- * The text is written *through* `replaceStatementBlock`, which refuses text carrying the block's
- * own markers. Slicing around the markers without inspecting what goes between them let a statement
- * terminate its own block early — everything after the injected marker then sat inside the block
- * physically while reading, to every reader, as ordinary human-written body.
+ * This is the *only* thing regeneration does to the folder note, and it is deliberately as close
+ * to nothing as possible. Everything in that file outside the statement block belongs to the
+ * person who wrote it: regeneration must never rebuild it from parts, only create it when absent
+ * and clear away what this plugin itself left behind in an older shape.
+ */
+async function ensureFolderNote(ref: SpaceRef, app: App): Promise<void> {
+	const existing = app.vault.getAbstractFileByPath(ref.contextPath);
+	if (!(existing instanceof TFile)) {
+		const created = await app.vault.create(ref.contextPath, renderBody(DEFAULT_STATEMENT_PLACEHOLDER).trimStart() + "\n");
+		// Recorded like any other file this plugin creates. The vault's own `create` event will fire
+		// for it too; whichever lands second finds the same content hash recorded and stands down.
+		await recordFileContentSpin(ref, "file_created", relativePath(ref, created), created, "observed", app);
+		return;
+	}
+
+	// One-time migration, self-limiting: strip a leading frontmatter block only when it parses as
+	// *our own* index shape. A person's own YAML frontmatter fails that parse and is left alone —
+	// "starts with ---" would not be a safe enough test to delete someone's content on.
+	const currentText = await app.vault.read(existing);
+	const fmMatch = currentText.match(/^---\n[\s\S]*?\n---\n/);
+	if (!fmMatch) return;
+	let isOurs = false;
+	try {
+		isOurs = parseFrontmatter(currentText) !== null;
+	} catch {
+		// A block in our shape but corrupted/older still throws; treat it as ours to clean up,
+		// since a person's own frontmatter would not have got far enough into the parse to throw.
+		isOurs = /^---\naetherweb_schema: /.test(currentText);
+	}
+	if (!isOurs) return;
+
+	const rest = currentText.slice(fmMatch[0].length).replace(/^\n+/, "");
+	await app.vault.modify(existing, rest.length > 0 ? rest : renderBody(DEFAULT_STATEMENT_PLACEHOLDER).trimStart() + "\n");
+	await recordFileContentSpin(ref, "file_modified", relativePath(ref, existing), existing, "observed", app);
+}
+
+/**
+ * Writes AI statement text into a space's folder note. The plugin-side mirror of the MCP server's
+ * `write_statement`.
+ *
+ * Scoped to the statement block and nothing else. The rest of the folder note is the person's own
+ * writing, and `replaceStatementBlock` preserves it byte for byte — it also refuses text carrying
+ * the block's own markers, since slicing around markers without inspecting what goes between them
+ * let a statement terminate its own block early, leaving everything after the injected marker
+ * inside the block physically while reading, to every reader, as ordinary human-written text.
+ *
+ * The tip this was generated against is recorded in the signature itself (`at_tip`), not in a
+ * separate field — so it travels with the prose it describes and cannot fall out of sync with it.
  */
 export async function writeStatement(
 	ref: SpaceRef,
@@ -149,26 +161,22 @@ export async function writeStatement(
 ): Promise<void> {
 	const existing = app.vault.getAbstractFileByPath(ref.contextPath);
 	if (!(existing instanceof TFile)) {
-		throw new Error(`[AethersWeb] cannot write statement: no context note at ${ref.contextPath}`);
+		throw new Error(`[AethersWeb] cannot write statement: no folder note at ${ref.contextPath}`);
 	}
 	const current = await app.vault.read(existing);
 	if (!findStatementBlock(current)) {
 		throw new Error(`[AethersWeb] statement markers not found in ${ref.contextPath}`);
 	}
-	const withNewStatement = writeSignedStatement(current, text, agent, atTip, ref.contextPath);
-
-	// statement_tip lives inside the frontmatter block. Patched as raw text — mirroring the MCP
-	// server's writeStatementFs — rather than through processFrontMatter, which reformats every
-	// other field in the block via Obsidian's own (unquoted) YAML style and would silently make the
-	// note unparseable to the server's strict parseFrontmatter; see regenerateContextLocked's
-	// comment for the full story. Safe to patch independently of the body edit above: this line
-	// lives entirely outside the region that edit touched.
-	const tipLine = `statement_tip: ${JSON.stringify(atTip)}`;
-	const final = /^statement_tip:.*$/m.test(withNewStatement)
-		? withNewStatement.replace(/^statement_tip:.*$/m, tipLine)
-		: withNewStatement.replace(/^---\n([\s\S]*?)\n---\n/, (_whole, fm: string) => `---\n${fm}\n${tipLine}\n---\n`);
+	const final = writeSignedStatement(current, text, agent, atTip, ref.contextPath);
+	if (final === current) return; // byte-identical prose — signature and verification preserved
 
 	await app.vault.modify(existing, final);
+
+	// The folder note is an ordinary logged file, so this write is recorded like any other. The
+	// vault's own `modify` event will also fire for it; whichever of the two lands second finds the
+	// same content hash already recorded and stands down (core/guards.ts).
+	const spin = await recordFileContentSpin(ref, "file_modified", relativePath(ref, existing), existing, "observed", app);
+	if (spin) await regenerateContext(ref, app);
 }
 
 /**
@@ -179,6 +187,10 @@ export async function writeStatement(
  * Returns null when there's nothing to judge: no spins yet, or the statement is already current.
  * `threshold` is a parameter rather than baked in so callers can pass the user's own setting
  * (`AethersWebSettings.statementDriftThreshold`) instead of the shared default.
+ *
+ * The comparison point is the statement's own signature (`at_tip`), so a person editing their own
+ * writing elsewhere in the folder note never registers as statement drift — only what the
+ * statement was actually generated against moves it.
  */
 export async function checkStatementDrift(
 	ref: SpaceRef,
@@ -189,10 +201,13 @@ export async function checkStatementDrift(
 	if (head === null) return null;
 
 	const statementTip = await readStatementTip(ref.contextPath, app);
-	if (statementTip === head) return null;
-
 	const log = await readLog(ref, app);
-	return assessStatementDrift(spinsSinceTip(log, statementTip), statementTip !== null, threshold);
+	// Excludes the folder note's own spins — see spinsSinceStatement. Writing a statement edits
+	// that note, so counting its own write would leave every statement stale against itself.
+	const drifted = spinsSinceStatement(log, statementTip, ref.contextPath.slice(ref.path.length + 1));
+	if (statementTip !== null && drifted.length === 0) return null;
+
+	return assessStatementDrift(drifted, statementTip !== null, threshold);
 }
 
 export interface StatementReview {

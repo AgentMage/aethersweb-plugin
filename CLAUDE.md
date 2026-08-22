@@ -19,8 +19,9 @@ The real, openable test vault is the **sibling directory** `../AethersWeb` (`/ho
 after every build; building alone does not hot-reload it.
 
 That vault also has `folder-notes` and `quick-explorer` enabled. `folder-notes` manages
-`<Folder>/<Folder>.md` — the same filename convention context notes use. Worth remembering when
-something touches a context note and behaves oddly.
+`<Folder>/<Folder>.md` — the same file AethersWeb uses for a space's folder note. That is no longer
+a collision to work around: the folder note *is* an ordinary note the person writes in, and both
+plugins treating it as one is the intended arrangement.
 
 ## What is built
 
@@ -42,15 +43,27 @@ trigger), checkpoint/log-pruning (the spin type is reserved, never emitted), mul
 Read `Spec.md` for the real thing. The parts most often got wrong in code:
 
 - **Every folder is a space**, single-parent, no exceptions. The vault root is never a space.
-- **The log is authoritative; the context is derived and disposable.** A space's log records only
+- **The log is authoritative; the index is derived and disposable.** A space's log records only
   its own level — a subspace's changes never produce a parent log entry.
+- **Two files, two natures.** `.aether/index.md` is the machine index (files, hashes, subspace
+  tips, counts, `source_tip`, `generated_at`) — rewritten on every spin and **never logged**, for
+  the same reason `.aether/head` isn't: it is a cache of what the log already says, not content.
+  Its `source_tip`/`generated_at` change purely as a side effect of writing, so an index that were
+  itself logged could never settle. `<Folder>/<Folder>.md` is the **folder note**: an ordinary note
+  the person writes in, logged like any other file, which also holds the AI statement inside its
+  marked block. Regeneration only ever creates that note or strips a pre-split note's leftover
+  frontmatter — everything else in it is theirs.
 - **The log carries real content**, not just hashes: full content on create, unified diffs on text
   change, full snapshots for binary. `verifyContentReplay` enforces that replay reproduces the
   recorded hash. (The original spec said hashes-only; that was deliberately reversed.)
 - **Chains are independent per space.** A space's tip never commits to its children's tips. This is
   what makes spaces portable — so **moving a space must not touch its own log.**
-- **Staleness lives in the parent's context, never its log.** Do not auto-refresh a parent's
-  frontmatter when a child's log advances: the stale child tip *is* the staleness signal.
+- **Staleness lives in the parent's index, never its log.** Do not auto-refresh a parent's index
+  when a child's log advances: the stale child tip *is* the staleness signal.
+- **Statement staleness comes from the signature's `at_tip`**, measured over spins that are *not*
+  the folder note's own (`spinsSinceStatement`). Counting the note's own spins would leave every
+  statement stale against its own creation, and would make a person's writing in that file read as
+  AI drift. There is no `statement_tip` field — the signature carries it, with the prose.
 - `.aether/` is Obsidian-ignored, travels with the folder, and is how identity survives moves
   without an ID system.
 - **`observed` vs `detected` is never collapsed.** `detected` means nobody witnessed it.
@@ -96,7 +109,7 @@ and verification. Route every AI write through them.
   statement.ts`) is the one place that decides it. An authored file is derived from nothing and
   stays pending until a person stands behind it; a statement is rebuilt from the log whenever the
   space moves on, so `unverified` is its normal state, not a task. Signed and attributed either way
-  — only the ask differs. Never prompt, list, or nag on a context note's statement.
+  — only the ask differs. Never prompt, list, or nag on a folder note's statement.
 - Re-writing byte-identical prose is a no-op preserving signature and verification. Do not
   reintroduce a fresh timestamp per write: it defeats no-op suppression and silently discards
   approval.

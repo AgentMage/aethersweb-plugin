@@ -3,7 +3,7 @@ import { DEFAULT_DEBOUNCE_MS, DEFAULT_RECONCILE_INTERVAL_MINUTES, STATEMENT_DRIF
 
 export * from "./core/types";
 
-/** Resolved handle to a space: its folder plus its .aether/ and context-note paths. */
+/** Resolved handle to a space: its folder plus its .aether/ and folder-note paths. */
 export interface SpaceRef {
 	folder: TFolder;
 	/** Vault-relative path to this space's folder. Equals folder.path; kept for clarity at call sites. */
@@ -11,7 +11,12 @@ export interface SpaceRef {
 	aetherDir: string;
 	logPath: string;
 	headPath: string;
-	/** <path>/<folder.name>.md — the folder-note convention context note. */
+	/** <aetherDir>/index.md — the derived machine index. Rewritten on every spin, never logged. */
+	indexPath: string;
+	/**
+	 * <path>/<folder.name>.md — the folder note. An ordinary note the person writes in, which also
+	 * holds the AI statement inside its marked block. Logged like any other file.
+	 */
 	contextPath: string;
 }
 

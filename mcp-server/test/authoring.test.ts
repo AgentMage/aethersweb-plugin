@@ -192,7 +192,26 @@ describe("move_space", () => {
 
 		const moved = await moveSpaceFs(vaultRoot, "UserSpace/Trinidad", "UserSpace/Trinidad Ranch");
 		expect(moved.newName).toBe("Trinidad Ranch");
-		await expect(readFile(moved.to.contextPath, "utf8")).resolves.toContain("space_path");
+		await expect(readFile(moved.to.contextPath, "utf8")).resolves.toContain(STATEMENT_START_MARKER);
+	});
+
+	// The folder note's name tracks the folder's, so renaming a space changes a path *inside* it.
+	// Unrecorded, the log would name a file that is no longer there and the next reconciliation
+	// would "repair" it with a spurious delete-plus-create pair.
+	it("records the folder note's own rename, so reconciliation finds nothing to fix after", async () => {
+		await makeSpace("UserSpace");
+		await makeSpace("UserSpace/Trinidad");
+
+		const moved = await moveSpaceFs(vaultRoot, "UserSpace/Trinidad", "UserSpace/Trinidad Ranch");
+		const log = await readLogFs(moved.to);
+		expect(log[log.length - 1]).toMatchObject({
+			spin_type: "file_renamed",
+			payload: { old_path: "Trinidad.md", path: "Trinidad Ranch.md" },
+		});
+		expect(verifyChain(log).ok).toBe(true);
+
+		const emitted = await reconcileSpaceFs(vaultRoot, moved.to);
+		expect(emitted).toEqual([]);
 	});
 
 	it("refuses to move a space into itself", async () => {

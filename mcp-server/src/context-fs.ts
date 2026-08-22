@@ -1,18 +1,25 @@
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { CONTEXT_SCHEMA_VERSION, DEFAULT_STATEMENT_PLACEHOLDER } from "../../src/core/constants";
-import { assessStatementDrift, spinsSinceTip } from "../../src/core/drift";
-import type { StatementDriftAssessment } from "../../src/core/drift";
-import { findStatementBlock, writeSignedStatement } from "../../src/core/statement";
-import { buildNoteText, extractStatementBlock, parseFrontmatter, renderBody, stringifyFrontmatter } from "../../src/core/context-format";
+import { describeStatementDrift, spinsSinceStatement } from "../../src/core/drift";
+import type { StatementDriftFacts } from "../../src/core/drift";
+import { findStatementBlock, readSignedStatement, writeSignedStatement } from "../../src/core/statement";
+import { buildIndexText, parseFrontmatter, renderBody, stringifyFrontmatter } from "../../src/core/context-format";
 import type { ContextFileEntry, ContextFrontmatter, ContextSubspaceEntry } from "../../src/core/types";
 import { hashFileFs, immediateFilesFs, immediateSubspacesFs, relativePathFs } from "./space-fs";
 import type { SpaceRefFs } from "./space-fs";
 import { readHeadFs, readLogFs } from "./vault-io";
+import { recordWrittenFile } from "./write-fs";
 
+/**
+ * The tip a space's statement was last generated against, read from the statement's own signature.
+ * Mirrors src/context.ts::readStatementTip — the signature is the authority because `at_tip`
+ * travels with the prose it describes, so a person editing their own writing elsewhere in the
+ * folder note never registers as statement drift.
+ */
 async function readExistingStatementTip(contextPath: string): Promise<string | null> {
 	try {
-		const text = await readFile(contextPath, "utf8");
-		return parseFrontmatter(text)?.statement_tip ?? null;
+		return readSignedStatement(await readFile(contextPath, "utf8"))?.signature?.at_tip ?? null;
 	} catch {
 		return null;
 	}
@@ -28,14 +35,20 @@ async function exists(path: string): Promise<boolean> {
 }
 
 /**
- * Rebuilds a space's context note on disk, mirroring context.ts::regenerateContext. Frontmatter
- * is always fully reconstructed from current filesystem truth via stringifyFrontmatter — the
- * plugin only does this for brand-new notes (existing ones go through Obsidian's own
- * processFrontMatter), but since this server has no such serializer to defer to, every write here
- * is a full rewrite. The AI statement body (between the sentinel markers) is read back and
- * carried forward verbatim, never touched by this function — matches the plugin's own contract.
+ * Rebuilds a space's machine index (`.aether/index.md`) from current filesystem truth, mirroring
+ * context.ts::regenerateContext. Fully reconstructed every time, never patched incrementally.
+ *
+ * Writes nothing to the folder note beyond ensuring it exists with a statement block (and clearing
+ * away a pre-split note's obsolete frontmatter), and appends nothing to the log. That is what lets
+ * it run unconditionally after every spin without chasing its own tail — the index records
+ * `source_tip`/`generated_at`, both of which change purely as a side effect of writing.
  */
 export async function regenerateContextFs(vaultRoot: string, ref: SpaceRefFs): Promise<ContextFrontmatter> {
+	// Before the index is built, not after: creating the folder note records a spin, so doing it
+	// first means the index below is written against the head that already includes it. The other
+	// order leaves the index a step behind its own space from the moment a space is created.
+	await ensureFolderNoteFs(ref);
+
 	const head = await readHeadFs(ref);
 
 	const files: ContextFileEntry[] = [];
@@ -52,12 +65,6 @@ export async function regenerateContextFs(vaultRoot: string, ref: SpaceRefFs): P
 		subspaces.push({ name: sub.path.split("/").pop() ?? sub.path, tip: await readHeadFs(sub) });
 	}
 
-	const noteExists = await exists(ref.contextPath);
-	const statementTip = noteExists ? await readExistingStatementTip(ref.contextPath) : null;
-	const statementBody = noteExists
-		? extractStatementBlock(await readFile(ref.contextPath, "utf8"))
-		: DEFAULT_STATEMENT_PLACEHOLDER;
-
 	const frontmatter: ContextFrontmatter = {
 		aetherweb_schema: CONTEXT_SCHEMA_VERSION,
 		space_path: ref.path,
@@ -67,40 +74,91 @@ export async function regenerateContextFs(vaultRoot: string, ref: SpaceRefFs): P
 		subspace_count: subspaces.length,
 		files,
 		subspaces,
-		statement_tip: statementTip,
 	};
 
-	await writeFile(ref.contextPath, buildNoteText(frontmatter, renderBody(statementBody)), "utf8");
+	await mkdir(dirname(ref.indexPath), { recursive: true });
+	await writeFile(ref.indexPath, buildIndexText(frontmatter), "utf8");
 	return frontmatter;
 }
 
 /**
- * Writes new AI statement text and stamps statement_tip, without touching the objective
- * frontmatter fields — mirrors context.ts::writeStatement, the function it's explicitly
- * documented as "the future drop-in point for the MCP server / statement generator" for.
+ * Makes sure the folder note exists and carries a statement block — and, for a note written before
+ * the index moved into `.aether/`, strips the now-obsolete frontmatter it still carries.
+ *
+ * The *only* thing regeneration does to the folder note, deliberately as close to nothing as
+ * possible: everything in that file outside the statement block belongs to the person who wrote
+ * it. Mirrors src/context.ts::ensureFolderNote.
  */
-export async function writeStatementFs(ref: SpaceRefFs, text: string, atTip: string, agent: string): Promise<void> {
+async function ensureFolderNoteFs(ref: SpaceRefFs): Promise<void> {
+	const relPath = relativePathFs(ref, ref.contextPath);
 	if (!(await exists(ref.contextPath))) {
-		throw new Error(`[aethersweb-mcp-server] cannot write statement: no context note at ${ref.contextPath}`);
+		await writeFile(ref.contextPath, renderBody(DEFAULT_STATEMENT_PLACEHOLDER).trimStart() + "\n", "utf8");
+		// Recorded like any other file this process creates. Skipping it would leave the note on
+		// disk but absent from the log, so the next reconciliation would "discover" it and record a
+		// `detected` create for a file this very process just wrote.
+		await recordWrittenFile(ref, relPath, ref.contextPath, "file_created", "observed");
+		return;
+	}
+
+	// One-time migration, self-limiting: strip a leading frontmatter block only when it parses as
+	// *our own* index shape. A person's own YAML frontmatter fails that parse and is left alone.
+	const currentText = await readFile(ref.contextPath, "utf8");
+	const fmMatch = currentText.match(/^---\n[\s\S]*?\n---\n/);
+	if (!fmMatch) return;
+	let isOurs = false;
+	try {
+		isOurs = parseFrontmatter(currentText) !== null;
+	} catch {
+		isOurs = /^---\naetherweb_schema: /.test(currentText);
+	}
+	if (!isOurs) return;
+
+	const rest = currentText.slice(fmMatch[0].length).replace(/^\n+/, "");
+	const replacement = rest.length > 0 ? rest : renderBody(DEFAULT_STATEMENT_PLACEHOLDER).trimStart() + "\n";
+	await writeFile(ref.contextPath, replacement, "utf8");
+	await recordWrittenFile(ref, relPath, ref.contextPath, "file_modified", "observed");
+}
+
+/**
+ * Writes new AI statement text into a space's folder note — mirrors context.ts::writeStatement.
+ *
+ * Scoped to the statement block and nothing else: the rest of the folder note is the person's own
+ * writing, preserved byte for byte by replaceStatementBlock, which also throws if the text carries
+ * the block's own markers (see core/statement.ts). The tip this was generated against is recorded
+ * in the signature itself (`at_tip`), so it travels with the prose rather than in a separate field.
+ *
+ * The write is logged like any other file's, since the folder note is now an ordinary logged file.
+ */
+export async function writeStatementFs(
+	vaultRoot: string,
+	ref: SpaceRefFs,
+	text: string,
+	atTip: string,
+	agent: string,
+): Promise<void> {
+	if (!(await exists(ref.contextPath))) {
+		throw new Error(`[aethersweb-mcp-server] cannot write statement: no folder note at ${ref.contextPath}`);
 	}
 	const current = await readFile(ref.contextPath, "utf8");
 	if (!findStatementBlock(current)) {
 		throw new Error(`[aethersweb-mcp-server] statement markers not found in ${ref.contextPath}`);
 	}
 
-	// Body substitution first — scoped to the block, which lives below the frontmatter and so
-	// cannot touch it. Throws if the text carries the block's own markers; see core/statement.ts.
-	const withNewStatement = writeSignedStatement(current, text, agent, atTip, ref.contextPath);
-
-	// statement_tip lives inside the frontmatter block, entirely outside the region just edited —
-	// safe to patch independently with a whole-text regex rather than re-parsing/reassembling
-	// the frontmatter block.
-	const tipLine = `statement_tip: ${JSON.stringify(atTip)}`;
-	const final = /^statement_tip:.*$/m.test(withNewStatement)
-		? withNewStatement.replace(/^statement_tip:.*$/m, tipLine)
-		: withNewStatement.replace(/^---\n([\s\S]*?)\n---\n/, (_whole, fm: string) => `---\n${fm}\n${tipLine}\n---\n`);
+	const final = writeSignedStatement(current, text, agent, atTip, ref.contextPath);
+	if (final === current) return; // byte-identical prose — signature and verification preserved
 
 	await writeFile(ref.contextPath, final, "utf8");
+	const spin = await recordWrittenFile(
+		ref,
+		relativePathFs(ref, ref.contextPath),
+		ref.contextPath,
+		"file_modified",
+		"observed",
+		agent,
+	);
+	// That spin advanced this space's head, so the index now trails it — regenerate for the same
+	// reason every other authoring path does. Mirrors src/context.ts::writeStatement.
+	if (spin) await regenerateContextFs(vaultRoot, ref);
 }
 
 export interface SubspaceStaleness {
@@ -121,68 +179,72 @@ export interface SubspaceStaleness {
 export interface SpaceStaleness {
 	space_path: string;
 	current_head: string | null;
-	has_context_note: boolean;
-	/** source_tip (frontmatter) vs current_head — does regenerate_context need to run. */
+	has_index: boolean;
+	/** source_tip (index) vs current_head — does regenerate_context need to run. */
 	frontmatter_stale: boolean;
 	/**
-	 * statement_tip (frontmatter) vs current_head — the raw fact, not the policy. True the moment
-	 * a single spin has landed since the last statement, or when none has ever been written.
+	 * The statement's own signature `at_tip` vs current_head — the raw fact, not a policy. True the
+	 * moment a single spin has landed since the last statement, or when none has ever been written.
 	 */
 	statement_stale: boolean;
 	/**
-	 * Judgment on top of `statement_stale`: whether the spins recorded since the last statement are
-	 * worth spending a write_statement call on — see core/drift.ts. Null exactly when
-	 * `statement_stale` is false (nothing to judge). `planRegenerationFs`'s `needs_write_statement`
-	 * is driven by `statement_drift?.significant`, not by `statement_stale` alone — a space one
-	 * trivial edit behind is stale in fact but not yet worth a fresh statement.
+	 * The facts behind `statement_stale`: how many spins have piled up since the statement was
+	 * written, and whether any of them changed this space's composition — see core/drift.ts. Null
+	 * exactly when `statement_stale` is false (nothing to judge). Reported, never pre-filtered: the
+	 * calling agent decides whether this is worth a write_statement call, since it can read the log
+	 * and see what actually changed rather than only counting.
 	 */
-	statement_drift: StatementDriftAssessment | null;
+	statement_drift: StatementDriftFacts | null;
 	subspaces: SubspaceStaleness[];
 	/** frontmatter_stale || statement_stale || any subspace not "ok". */
 	stale: boolean;
-	/** Set only when the context note exists but its frontmatter couldn't be parsed. */
+	/** Set only when the index exists but couldn't be parsed. */
 	error?: string;
 }
 
 /**
- * Compares a space's context note against current filesystem/log truth on both staleness axes:
- * this space's own source_tip/statement_tip vs its actual head (readHeadFs), and — since a
- * subspace's own log never produces a parent log entry (chains are independent per space) —
- * each subspace tip recorded in this space's frontmatter vs that subspace's own actual current
- * head. Also judges `statement_drift` when the statement is stale, so a caller can tell "one
- * trivial edit behind" apart from "worth a fresh write_statement" — see core/drift.ts. Read-only:
- * reports what's out of date, never fixes it (that's regenerate_context / write_statement).
+ * Compares a space's derived state against current filesystem/log truth on both staleness axes:
+ * the index's own source_tip and the statement's signature `at_tip` vs the actual head
+ * (readHeadFs), and — since a subspace's own log never produces a parent log entry (chains are
+ * independent per space) — each subspace tip recorded in the index vs that subspace's own actual
+ * current head. Read-only: reports what's out of date, never fixes it (that's regenerate_context /
+ * write_statement).
  */
 export async function checkStalenessFs(vaultRoot: string, ref: SpaceRefFs): Promise<SpaceStaleness> {
 	const current_head = await readHeadFs(ref);
-	const has_context_note = await exists(ref.contextPath);
+	const has_index = await exists(ref.indexPath);
 
 	let fm: ContextFrontmatter | null = null;
 	let error: string | undefined;
-	if (has_context_note) {
+	if (has_index) {
 		try {
-			fm = parseFrontmatter(await readFile(ref.contextPath, "utf8"));
-			if (fm === null) error = "context note has no frontmatter block";
+			fm = parseFrontmatter(await readFile(ref.indexPath, "utf8"));
+			if (fm === null) error = "index has no frontmatter block";
 		} catch (err) {
-			error = `frontmatter parse error: ${err instanceof Error ? err.message : String(err)}`;
+			error = `index parse error: ${err instanceof Error ? err.message : String(err)}`;
 		}
 	}
 
 	const frontmatter_stale = fm ? fm.source_tip !== current_head : true;
-	const recordedStatementTip = fm?.statement_tip ?? null;
-	const statement_stale = fm ? fm.statement_tip !== current_head : true;
-	// Only worth reading the log and judging drift when there's actually something to judge —
-	// most spaces most of the time are fully current, and the log read isn't free.
-	const statement_drift = statement_stale
-		? assessStatementDrift(spinsSinceTip(await readLogFs(ref), recordedStatementTip), recordedStatementTip !== null)
-		: null;
+
+	// Statement staleness is measured over the spins that are not the folder note's own — see
+	// spinsSinceStatement. Writing a statement edits that note, and the note is a logged file, so
+	// counting its own write would leave every statement permanently stale against itself.
+	const recordedStatementTip = await readExistingStatementTip(ref.contextPath);
+	const drifted = spinsSinceStatement(
+		await readLogFs(ref),
+		recordedStatementTip,
+		relativePathFs(ref, ref.contextPath),
+	);
+	const statement_stale = recordedStatementTip === null || drifted.length > 0;
+	const statement_drift = statement_stale ? describeStatementDrift(drifted, recordedStatementTip !== null) : null;
 	const subspaces = await diffSubspaces(vaultRoot, ref, fm?.subspaces ?? []);
 	const stale = frontmatter_stale || statement_stale || subspaces.some((s) => s.status !== "ok");
 
 	return {
 		space_path: ref.path,
 		current_head,
-		has_context_note,
+		has_index,
 		frontmatter_stale,
 		statement_stale,
 		statement_drift,
@@ -228,15 +290,17 @@ export interface RegenerationPlanEntry {
 	space_path: string;
 	/** Number of "/"-separated segments in space_path — deeper means further from the vault root. */
 	depth: number;
-	/** true when regenerate_context needs to run: own frontmatter is stale, or a subspace tip drifted. */
+	/** true when regenerate_context needs to run: own index is stale, or a subspace tip drifted. */
 	needs_regenerate_context: boolean;
 	/**
-	 * true when write_statement is worth running: statement_tip is behind current_head *and* the
-	 * drift since then is significant (core/drift.ts) — a subspace appeared/vanished, no statement
-	 * exists yet, or enough spins piled up to cross the threshold. A space one trivial edit behind
-	 * its last statement is deliberately left out of the plan rather than flagged every time.
+	 * true when this space's statement is behind its current head at all — the raw fact, not a
+	 * judgment about whether it's worth rewriting. Weigh `statement_drift` (and, where it matters,
+	 * what read_log actually shows changed) to decide that; a space one trivial edit behind reports
+	 * true here and may well not be worth a call.
 	 */
-	needs_write_statement: boolean;
+	statement_stale: boolean;
+	/** Facts behind `statement_stale`: spins accumulated, and any composition changes among them. */
+	statement_drift: StatementDriftFacts | null;
 	reasons: string[];
 }
 
@@ -249,16 +313,18 @@ export interface RegenerationPlanEntry {
  *
  * Bottom-up order is *not* needed for correctness of regenerate_context itself: it always reads a
  * subspace's actual current head straight off disk (readHeadFs), never off that subspace's own
- * context note, so parent and child frontmatter can be regenerated in either order with the same
- * result. The ordering exists for write_statement instead — per that tool's description, a parent's
- * statement must place the space among its parent, siblings, and subspaces, which is more accurate
- * when the children it's reading about (via read_context / list_spaces) already carry fresh
- * statements rather than ones about to be rewritten anyway.
+ * index, so parent and child indexes can be regenerated in either order with the same result. The
+ * ordering exists for write_statement instead — per that tool's description, a parent's statement
+ * must place the space among its parent, siblings, and subspaces, which is more accurate when the
+ * children it's reading about (via read_context / list_spaces) already carry fresh statements
+ * rather than ones about to be rewritten anyway.
  *
- * "Actually need work" is judged, not just detected, on the statement side: a space whose only
- * staleness is a statement a few trivial edits behind is left out of the plan entirely (see
- * core/drift.ts) rather than appearing with `needs_write_statement: false` and no other reason to
- * be here — the whole point of a threshold is spaces below it don't show up in the queue at all.
+ * Reports what is stale; does not pre-judge what is worth acting on. An earlier version filtered
+ * the statement side through a fixed spin-count threshold, which made sense only for the automatic
+ * generator this project never built — with generation always a deliberate agent call, that
+ * judgment belongs to the caller, who can read the log and see what actually changed rather than
+ * only counting. The plugin keeps a threshold for its own human-facing digest command, where a
+ * predictable cutoff is the point.
  */
 export async function planRegenerationFs(vaultRoot: string, refs: SpaceRefFs[]): Promise<RegenerationPlanEntry[]> {
 	const entries: RegenerationPlanEntry[] = [];
@@ -266,19 +332,19 @@ export async function planRegenerationFs(vaultRoot: string, refs: SpaceRefFs[]):
 		const status = await checkStalenessFs(vaultRoot, ref);
 		const driftedSubspaces = status.subspaces.filter((s) => s.status !== "ok");
 		const needs_regenerate_context = status.frontmatter_stale || driftedSubspaces.length > 0;
-		const needs_write_statement = status.statement_stale && (status.statement_drift?.significant ?? false);
-		if (!needs_regenerate_context && !needs_write_statement) continue;
+		if (!needs_regenerate_context && !status.statement_stale) continue;
 
 		const reasons: string[] = [];
-		if (status.frontmatter_stale) reasons.push("source_tip behind current_head");
-		if (needs_write_statement) reasons.push(...(status.statement_drift?.reasons ?? []));
+		if (status.frontmatter_stale) reasons.push("index source_tip behind current_head");
+		if (status.statement_stale) reasons.push(...(status.statement_drift?.reasons ?? ["statement behind current_head"]));
 		for (const s of driftedSubspaces) reasons.push(`subspace "${s.name}" ${s.status}`);
 
 		entries.push({
 			space_path: ref.path,
 			depth: ref.path.split("/").length,
 			needs_regenerate_context,
-			needs_write_statement,
+			statement_stale: status.statement_stale,
+			statement_drift: status.statement_drift,
 			reasons,
 		});
 	}

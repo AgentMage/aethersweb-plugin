@@ -47,8 +47,9 @@ describe("core/drift.ts::assessStatementDrift", () => {
 		const spins = [makeSpin(1, "file_created", "h1"), makeSpin(2, "file_modified", "h2")];
 		const result = assessStatementDrift(spins, true, 5);
 		expect(result.significant).toBe(false);
-		expect(result.reasons).toEqual([]);
 		expect(result.spinCount).toBe(2);
+		// The facts are still reported — only the significance verdict is withheld.
+		expect(result.reasons).toEqual(["2 spin(s) have accumulated since the last statement"]);
 	});
 
 	it("becomes significant once the spin count reaches the threshold", () => {
@@ -63,7 +64,7 @@ describe("core/drift.ts::assessStatementDrift", () => {
 		const result = assessStatementDrift(spins, true, 5);
 		expect(result.significant).toBe(true);
 		expect(result.structuralChanges).toEqual(["subspace_created"]);
-		expect(result.reasons).toEqual(["composition changed since the last statement (subspace_created)"]);
+		expect(result.reasons).toContain("composition changed since the last statement (subspace_created)");
 	});
 
 	it("dedupes repeated structural spin types and reports both triggers when both apply", () => {

@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, posix, relative, sep } from "node:path";
 import { sha256Hex, sha256HexBytes } from "../../src/core/hash";
-import { AETHER_DIR, BINARY_EXTENSIONS, HEAD_FILE, LOG_FILE } from "../../src/core/constants";
+import { AETHER_DIR, BINARY_EXTENSIONS, HEAD_FILE, INDEX_FILE, LOG_FILE } from "../../src/core/constants";
 import { isIgnoredPath } from "../../src/core/ignore";
 
 /**
@@ -16,7 +16,12 @@ export interface SpaceRefFs {
 	aetherDir: string;
 	logPath: string;
 	headPath: string;
-	/** <absPath>/<folder name>.md — the folder-note convention context note. */
+	/** <aetherDir>/index.md — the derived machine index. Rewritten on every spin, never logged. */
+	indexPath: string;
+	/**
+	 * <absPath>/<folder name>.md — the folder note. An ordinary note the person writes in, which
+	 * also holds the AI statement inside its marked block. Logged like any other file.
+	 */
 	contextPath: string;
 }
 
@@ -34,6 +39,7 @@ export function buildSpaceRefFs(vaultRoot: string, vaultRelativePath: string): S
 		aetherDir,
 		logPath: join(aetherDir, LOG_FILE),
 		headPath: join(aetherDir, HEAD_FILE),
+		indexPath: join(aetherDir, INDEX_FILE),
 		contextPath: join(absPath, `${folderName(vaultRelativePath)}.md`),
 	};
 }
@@ -77,15 +83,20 @@ export function walkSpacesFs(vaultRoot: string): AsyncGenerator<SpaceRefFs> {
 	return walkFolderFs(vaultRoot, "");
 }
 
-/** Direct file children of a space (dotfiles excluded — see isIgnoredName), excluding its own context note. */
+/**
+ * Direct file children of a space (dotfiles excluded — see isIgnoredName).
+ *
+ * The folder note is deliberately included — mirrors src/space.ts::immediateFiles, and for the
+ * same reason: now that the machine index lives in `.aether/index.md`, the folder note is an
+ * ordinary note a person writes in, and leaving it out would mean reconciliation never notices
+ * their edits to it.
+ */
 export async function immediateFilesFs(ref: SpaceRefFs): Promise<string[]> {
 	const entries = await readdir(ref.absPath, { withFileTypes: true });
 	const out: string[] = [];
 	for (const entry of entries) {
 		if (!entry.isFile() || isIgnoredName(entry.name)) continue;
-		const absFilePath = join(ref.absPath, entry.name);
-		if (absFilePath === ref.contextPath) continue;
-		out.push(absFilePath);
+		out.push(join(ref.absPath, entry.name));
 	}
 	return out;
 }

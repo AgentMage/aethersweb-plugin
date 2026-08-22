@@ -76,16 +76,24 @@ mismatch, which is corruption.
 
 ### 2. The context — derived
 
-- A materialized view, reconstructible from the log and the filesystem.
-- Never authoritative. Can be deleted at any time and regenerated on demand.
-- Two clearly separated halves:
-  - **Objective content list** (frontmatter): files, hashes, sizes, subspace names and their current
-    tip hashes, counts, dates. Cheap, machine-readable, Dataview-queryable.
-  - **AI state statement** (body, between sentinel markers): a written account of what this space is
-    and where it sits. See **The statement**.
+Two files, deliberately separated by *nature* rather than bundled by convenience:
 
-Regeneration rebuilds the frontmatter wholly from current filesystem truth and carries the statement
-body forward verbatim. It never writes statement text.
+- **`.aether/index.md` — the machine index.** Files, hashes, sizes, subspace names and their
+  current tip hashes, counts, `source_tip`, `generated_at`. A materialized view, reconstructible
+  from the log and the filesystem, never authoritative, deletable at any time.
+
+  It lives inside `.aether/` for exactly the reason `head` does: it is a cache of what the log
+  already says, so it is rewritten on every spin and **never logged**. `source_tip` and
+  `generated_at` change purely as a side effect of writing it — an index that were itself a logged
+  file could never settle, since each write would invalidate the tip it had just recorded.
+
+- **`<Folder>/<Folder>.md` — the folder note.** An ordinary note the person writes in, logged like
+  any other file in the space, which also carries the **AI state statement** between sentinel
+  markers. See **The statement**.
+
+Regeneration rebuilds the index wholly from current filesystem truth. It touches the folder note
+only to create it when absent — everything written there afterward belongs to the person, and the
+statement block is replaced only by an explicit `write_statement`.
 
 ## Independent chains
 
@@ -104,16 +112,23 @@ change in containment, because that is theirs to record.
 
 ## Staleness
 
-Each subspace's current tip hash is recorded in the **parent's context**, never in the parent's log.
-A parent's context is stale if and only if a listed child tip no longer matches. This is the entire
+Each subspace's current tip hash is recorded in the **parent's index**, never in the parent's log.
+A parent's index is stale if and only if a listed child tip no longer matches. This is the entire
 staleness mechanism — there is **no central registry**. The head index is distributed into the
-context files themselves, so there is nothing to drift out of sync with the filesystem.
+per-space index files themselves, so there is nothing to drift out of sync with the filesystem.
 
-The context also carries `source_tip` (the head its frontmatter was built from) and `statement_tip`
-(the head its statement was written against). When either differs from the space's current head, the
-corresponding half is known-stale without reading anything more.
+The index also carries `source_tip`, the head it was built from; when that differs from the space's
+current head, the index is known-stale without reading anything more.
 
-This is why parent contexts are **not** auto-refreshed when a child's log advances. The recorded
+**Statement staleness is measured differently**, because the statement shares a file with the
+person's own writing. Its comparison point is the `at_tip` recorded in its own signature — which
+travels with the prose it describes, so it cannot fall out of sync with it — and the spins counted
+against it exclude anything that happened to the folder note itself. Both exclusions are load-
+bearing: writing a statement edits that note, so counting the note's own spins would leave every
+statement stale against its own creation, and a person writing their own notes in that file would
+otherwise read as AI-statement drift.
+
+This is why parent indexes are **not** auto-refreshed when a child's log advances. The recorded
 child tip going out of date *is* the signal that the parent's statement no longer describes its
 composition. Refreshing it eagerly would destroy the only mechanism that reports it.
 
@@ -349,10 +364,14 @@ rather than a verified fact; it accepts only spin types that describe the log it
 
 - The log is the costed storage, and it now carries real content — so it grows faster than a
   hash-only design would. This is the accepted trade (see above).
-- Every context is disposable. Cold spaces can have theirs evicted and regenerated on demand.
-- The objective content list regenerates on every change — nearly free.
-- The AI statement is debounced: on demand or past a threshold, never on every keystroke, or deep
-  edits cascade model calls up the tree.
+- Every index is disposable. Cold spaces can have theirs evicted and regenerated on demand.
+- The machine index regenerates on every change — nearly free, and never logged.
+- The AI statement is written on demand, never automatically, so deep edits cannot cascade model
+  calls up the tree. The threshold this section originally called for was infrastructure for an
+  automatic generator that was never built; with generation always a deliberate agent call, the
+  MCP surface reports raw drift facts (spin count, composition changes) and leaves the judgment to
+  the caller, who can read the log and see what actually changed. The plugin keeps a threshold for
+  its own human-facing digest command, where a predictable cutoff is the point.
 - **Not built:** log growth is meant to be bounded by periodic **checkpoints** — a snapshot hash plus
   the range it covers, letting older entries be pruned or cold-stored while the chain stays
   verifiable. The `checkpoint` spin type is reserved and never emitted.

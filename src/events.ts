@@ -101,7 +101,7 @@ export function registerVaultEventHandlers(plugin: AethersWebPlugin): void {
 
 			if (!(file instanceof TFile)) return;
 			const ref = await findOwningSpaceByPath(parentPathOf(file.path), app);
-			if (!enabled(ref) || file.path === ref.contextPath) return;
+			if (!enabled(ref)) return;
 			const spin = await recordFileContentSpin(ref, "file_created", relativePath(ref, file), file, "observed", app);
 			if (spin) await regenerateContext(ref, app);
 		}),
@@ -111,7 +111,10 @@ export function registerVaultEventHandlers(plugin: AethersWebPlugin): void {
 		app.vault.on("modify", async (file) => {
 			if (isIgnoredPath(file.path) || !(file instanceof TFile)) return;
 			const ref = await findOwningSpaceByPath(parentPathOf(file.path), app);
-			if (!enabled(ref) || file.path === ref.contextPath) return;
+			if (!enabled(ref)) return;
+			// The folder note is captured here like any other note. A statement write records itself
+			// (context.ts::writeStatement); whichever of the two lands second finds the same content
+			// hash already recorded and stands down — see core/guards.ts.
 			scheduleObservedModify(plugin, ref, file);
 		}),
 	);
@@ -122,7 +125,7 @@ export function registerVaultEventHandlers(plugin: AethersWebPlugin): void {
 
 			if (file instanceof TFile) {
 				const ref = await findExistingOwningSpaceByPath(parentPathOf(file.path), app);
-				if (!enabled(ref) || file.path === ref.contextPath) return;
+				if (!enabled(ref)) return;
 				const path = relativePath(ref, file);
 				cancelPendingModify(`${ref.path}::${path}`);
 				const spin = await appendFileDeleted(ref, path, "observed", app);
@@ -217,10 +220,14 @@ async function handleFileRename(
 	const newRef = await findOwningSpaceByPath(parentPathOf(file.path), app);
 	const oldRef = await findExistingOwningSpaceByPath(parentPathOf(oldPath), app);
 
-	// A context note moving under its own space's regeneration is the plugin's own bookkeeping,
-	// not a user file event.
-	if (newRef && file.path === newRef.contextPath) return;
-	if (oldRef && oldPath === oldRef.contextPath) return;
+	// The folder note is no longer skipped here. When a space is renamed, handleFolderRename renames
+	// the note to follow the folder (Foo/Foo.md -> FooBar/FooBar.md), which genuinely changes its
+	// path *within* the space — so the space's own log has to record it. Skipping it would leave the
+	// log naming a file that no longer exists on disk, and reconciliation (which now walks the
+	// folder note too) would "fix" that with a spurious delete-plus-create pair. Note this is not
+	// the same as the space itself moving, which still never touches the space's own log: a whole-
+	// folder move leaves every descendant's relative path unchanged, and RenameEchoTracker drops
+	// those echoes before they reach here.
 
 	if (oldRef && newRef && oldRef.path === newRef.path) {
 		const oldRelPath = oldPath.slice(oldRef.path.length + 1);

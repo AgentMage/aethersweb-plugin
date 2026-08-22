@@ -41,7 +41,7 @@ describe("space-fs.ts", () => {
 		expect(found.sort()).toEqual(["UserSpace", "UserSpace/Location"]);
 	});
 
-	it("immediateFilesFs excludes the space's own context note and dotfiles", async () => {
+	it("immediateFilesFs includes the folder note (it is the person's own note now) and excludes dotfiles", async () => {
 		await claimSpace("UserSpace");
 		await writeFile(join(vaultRoot, "UserSpace", "notes.md"), "hello");
 		await writeFile(join(vaultRoot, "UserSpace", "UserSpace.md"), "context note");
@@ -50,7 +50,10 @@ describe("space-fs.ts", () => {
 		const ref = buildSpaceRefFs(vaultRoot, "UserSpace");
 		const files = await immediateFilesFs(ref);
 
-		expect(files).toEqual([join(vaultRoot, "UserSpace", "notes.md")]);
+		expect(files.sort()).toEqual([
+			join(vaultRoot, "UserSpace", "UserSpace.md"),
+			join(vaultRoot, "UserSpace", "notes.md"),
+		]);
 	});
 
 	describe("listTreeFs", () => {

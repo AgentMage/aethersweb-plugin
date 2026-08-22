@@ -43,7 +43,6 @@ export async function reconcileSpaceFs(vaultRoot: string, ref: SpaceRefFs): Prom
 	const currentPaths = new Set<string>();
 	for (const absFilePath of await immediateFilesFs(ref)) {
 		const relPath = relativePathFs(ref, absFilePath);
-		if (absFilePath === ref.contextPath) continue;
 		currentPaths.add(relPath);
 		const prior = knownFiles[relPath];
 		const currentHash = await hashFileFs(absFilePath);

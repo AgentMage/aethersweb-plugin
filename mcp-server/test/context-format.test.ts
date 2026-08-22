@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildNoteText, parseFrontmatter, renderBody, stringifyFrontmatter } from "../../src/core/context-format";
-import { DEFAULT_STATEMENT_PLACEHOLDER } from "../../src/core/constants";
+import { buildIndexText, parseFrontmatter, stringifyFrontmatter } from "../../src/core/context-format";
 import type { ContextFrontmatter } from "../../src/core/types";
 
 const baseFm: ContextFrontmatter = {
@@ -12,12 +11,11 @@ const baseFm: ContextFrontmatter = {
 	subspace_count: 1,
 	files: [{ path: "notes.md", hash: "deadbeef", size: 42 }],
 	subspaces: [{ name: "Sub", tip: "def456" }],
-	statement_tip: "abc123",
 };
 
 describe("context-format.ts::parseFrontmatter", () => {
-	it("round-trips a non-empty, non-null frontmatter through stringifyFrontmatter/buildNoteText", () => {
-		const text = buildNoteText(baseFm, renderBody(DEFAULT_STATEMENT_PLACEHOLDER));
+	it("round-trips a non-empty, non-null frontmatter through stringifyFrontmatter/buildIndexText", () => {
+		const text = buildIndexText(baseFm);
 		expect(parseFrontmatter(text)).toEqual(baseFm);
 	});
 
@@ -29,9 +27,8 @@ describe("context-format.ts::parseFrontmatter", () => {
 			subspace_count: 1,
 			files: [],
 			subspaces: [{ name: "Sub", tip: null }],
-			statement_tip: null,
 		};
-		const text = buildNoteText(fm, renderBody(DEFAULT_STATEMENT_PLACEHOLDER));
+		const text = buildIndexText(fm);
 		expect(parseFrontmatter(text)).toEqual(fm);
 	});
 
@@ -41,7 +38,7 @@ describe("context-format.ts::parseFrontmatter", () => {
 			files: [{ path: 'weird "quoted" näme.md', hash: "h", size: 1 }],
 			subspaces: [{ name: 'Sub "Space" 🌀', tip: null }],
 		};
-		const text = buildNoteText(fm, renderBody(DEFAULT_STATEMENT_PLACEHOLDER));
+		const text = buildIndexText(fm);
 		expect(parseFrontmatter(text)).toEqual(fm);
 	});
 
@@ -50,17 +47,17 @@ describe("context-format.ts::parseFrontmatter", () => {
 	});
 
 	it("throws on a hand-corrupted block: wrong key at a fixed position", () => {
-		const text = buildNoteText(baseFm, renderBody(DEFAULT_STATEMENT_PLACEHOLDER)).replace("space_path:", "totally_wrong_key:");
+		const text = buildIndexText(baseFm).replace("space_path:", "totally_wrong_key:");
 		expect(() => parseFrontmatter(text)).toThrow();
 	});
 
 	it("throws when file_count doesn't match the actual files: entry count", () => {
-		const text = buildNoteText(baseFm, renderBody(DEFAULT_STATEMENT_PLACEHOLDER)).replace("file_count: 1", "file_count: 2");
+		const text = buildIndexText(baseFm).replace("file_count: 1", "file_count: 2");
 		expect(() => parseFrontmatter(text)).toThrow(/file_count/);
 	});
 
 	it("throws on a non-integer where an integer is expected", () => {
-		const text = buildNoteText(baseFm, renderBody(DEFAULT_STATEMENT_PLACEHOLDER)).replace("file_count: 1", "file_count: not-a-number");
+		const text = buildIndexText(baseFm).replace("file_count: 1", "file_count: not-a-number");
 		expect(() => parseFrontmatter(text)).toThrow();
 	});
 });

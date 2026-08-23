@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { signatureStatus } from "../../../src/core/signature";
-import { readSignedStatement } from "../../../src/core/statement";
+import { readSignedBlock, readSignedStatement } from "../../../src/core/statement";
 import { checkStalenessFs } from "../context-fs";
 import {
 	buildSpaceRefFs,
@@ -36,6 +36,8 @@ export function registerDescribeSpaceTool(server: McpServer, vaultRoot: string):
 				"The primary read. Returns a space's own contents (files with hashes and sizes, log " +
 				"head, current statement) together with its position in the tree (parent, siblings, " +
 				"and each subspace with its tip and shape), plus staleness flags.\n\n" +
+				"Also returns shared_text: the folder note's shared block, which you and the user " +
+				"both write in (write_shared) and nothing regenerates. Read it before writing.\n\n" +
 				"Prefer this over read_context when you are about to write a statement: it is what " +
 				"the two required halves — what the space is, and where it sits — are read from. " +
 				"Use read_file on the files it lists when the statement needs what they actually say " +
@@ -94,12 +96,23 @@ export function registerDescribeSpaceTool(server: McpServer, vaultRoot: string):
 			let statement_text = "";
 			let statement_signature = null;
 			let statement_status = "unsigned";
+			let shared_text = "";
+			let shared_signature = null;
 			try {
-				const found = readSignedStatement(await readFile(ref.contextPath, "utf8"));
+				const noteText = await readFile(ref.contextPath, "utf8");
+				const found = readSignedStatement(noteText);
 				if (found) {
 					statement_text = found.text;
 					statement_signature = found.signature;
 					statement_status = signatureStatus(found.signature, found.text);
+				}
+				// The shared block is returned by the primary read for the same reason position is:
+				// this is the call an agent makes before writing a statement, and anything the person
+				// left for whoever works here next is worthless if the recommended path walks past it.
+				const shared = readSignedBlock(noteText, "shared");
+				if (shared) {
+					shared_text = shared.text;
+					shared_signature = shared.signature;
 				}
 			} catch {
 				statement_text = "";
@@ -124,6 +137,12 @@ export function registerDescribeSpaceTool(server: McpServer, vaultRoot: string):
 				// Content a person is actually asked to confirm lives in authored files, not here.
 				statement_signature,
 				statement_status,
+				// The folder note's shared block: written by agents and by the person, and never
+				// regenerated. Read it before writing anything about this space — and if what it
+				// holds contradicts the statement you were about to write, say so rather than
+				// writing around it.
+				shared_text,
+				shared_signature,
 				staleness,
 			});
 		},

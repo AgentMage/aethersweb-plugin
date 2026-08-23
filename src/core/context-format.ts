@@ -1,5 +1,8 @@
 import {
+	DEFAULT_SHARED_PLACEHOLDER,
 	DEFAULT_STATEMENT_PLACEHOLDER,
+	SHARED_END_MARKER,
+	SHARED_START_MARKER,
 	STATEMENT_END_MARKER,
 	STATEMENT_START_MARKER,
 } from "./constants";
@@ -169,15 +172,28 @@ export function extractStatementBlock(noteText: string): string {
 	return noteText.slice(startIdx + STATEMENT_START_MARKER.length, endIdx).trim();
 }
 
+/** The same, for the shared region. Raw contents, signature and all — this is a carry-forward read. */
+export function extractSharedBlock(noteText: string): string {
+	const startIdx = noteText.indexOf(SHARED_START_MARKER);
+	const endIdx = noteText.indexOf(SHARED_END_MARKER);
+	if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
+		return DEFAULT_SHARED_PLACEHOLDER;
+	}
+	return noteText.slice(startIdx + SHARED_START_MARKER.length, endIdx).trim();
+}
+
 /**
- * A brand-new folder note's starting body: one statement block. Takes raw block contents (which
- * for an already-signed note include its signature), so this is the carry-forward path — new AI
- * text is written through `statement.ts`'s signing functions instead, which validate and attribute
- * it. Only used at creation now; an existing folder note is never rebuilt from its parts, since
- * everything outside the block belongs to the person who wrote it.
+ * A brand-new folder note's starting body: the statement block, then the shared block, then
+ * nothing — the rest of the note is for the person to write, and starting them off with headings
+ * they did not ask for would be furnishing their room.
+ *
+ * Takes raw block contents (which for an already-signed note include its signature), so this is the
+ * carry-forward path — new AI text is written through `statement.ts`'s signing functions instead,
+ * which validate and attribute it. Only used at creation now; an existing folder note is never
+ * rebuilt from its parts, since everything outside the two blocks belongs to whoever wrote it.
  */
-export function renderBody(statementText: string): string {
-	return `\n${wrapPreservedBlockBody(statementText)}`;
+export function renderBody(statementText: string, sharedText: string = DEFAULT_SHARED_PLACEHOLDER): string {
+	return `\n${wrapPreservedBlockBody(statementText)}\n${wrapPreservedBlockBody(sharedText, "shared")}`;
 }
 
 /** The full text of a space's `.aether/index.md`. Frontmatter only — the index has no body. */

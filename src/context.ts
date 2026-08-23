@@ -3,10 +3,14 @@ import { CONTEXT_SCHEMA_VERSION, DEFAULT_STATEMENT_PLACEHOLDER } from "./core/co
 import { assessStatementDrift, spinsSinceStatement } from "./core/drift";
 import type { StatementDriftAssessment } from "./core/drift";
 import {
+	appendToSharedBlock,
+	ensureSharedBlock,
 	findStatementBlock,
+	readSignedBlock,
 	readSignedStatement,
 	replaceSignature,
 	requiresVerification,
+	writeSignedBlock,
 	writeSignedStatement,
 } from "./core/statement";
 import { applyVerification, awaitsVerification, signatureStatus } from "./core/signature";
@@ -100,13 +104,19 @@ async function regenerateContextLocked(ref: SpaceRef, app: App): Promise<void> {
 }
 
 /**
- * Makes sure the folder note exists and carries a statement block — and, for a note written before
- * the index moved into `.aether/`, strips the now-obsolete frontmatter it still carries.
+ * Makes sure the folder note exists and carries both of its blocks — the statement and the shared
+ * region — and, for a note written before the index moved into `.aether/`, strips the now-obsolete
+ * frontmatter it still carries.
  *
  * This is the *only* thing regeneration does to the folder note, and it is deliberately as close
- * to nothing as possible. Everything in that file outside the statement block belongs to the
- * person who wrote it: regeneration must never rebuild it from parts, only create it when absent
- * and clear away what this plugin itself left behind in an older shape.
+ * to nothing as possible. Everything in that file outside the two blocks belongs to the person who
+ * wrote it: regeneration must never rebuild it from parts, only create what is absent and clear
+ * away what this plugin itself left behind in an older shape.
+ *
+ * Creating the shared block belongs in that short list for the reason `ensureSharedBlock` gives: a
+ * region held in common that only materializes after an agent has written in it is not held in
+ * common. It is created empty, once, and never touched here again — regeneration reads what is in
+ * it and rewrites nothing.
  */
 async function ensureFolderNote(ref: SpaceRef, app: App): Promise<void> {
 	const existing = app.vault.getAbstractFileByPath(ref.contextPath);
@@ -118,12 +128,30 @@ async function ensureFolderNote(ref: SpaceRef, app: App): Promise<void> {
 		return;
 	}
 
-	// One-time migration, self-limiting: strip a leading frontmatter block only when it parses as
-	// *our own* index shape. A person's own YAML frontmatter fails that parse and is left alone —
-	// "starts with ---" would not be a safe enough test to delete someone's content on.
 	const currentText = await app.vault.read(existing);
+	// Both fixes go into one write and one spin: they are the same act — bringing a note written
+	// under an older shape up to the current one — and splitting them would put two file_modified
+	// entries in the log for a single regeneration that changed nothing a person did.
+	const migrated = stripLegacyIndexFrontmatter(currentText);
+	const withShared = ensureSharedBlock(migrated) ?? migrated;
+	if (withShared === currentText) return;
+
+	await app.vault.modify(existing, withShared);
+	await recordFileContentSpin(ref, "file_modified", relativePath(ref, existing), existing, "observed", app);
+}
+
+/**
+ * Strips the leading frontmatter block from a pre-split folder note, or returns the text unchanged.
+ *
+ * One-time and self-limiting: it strips only when the block parses as *our own* index shape. A
+ * person's own YAML frontmatter fails that parse and is left alone — "starts with ---" would not be
+ * a safe enough test to delete someone's content on. Shared with the MCP server's mirror of this
+ * function only by shape, not by import: it takes an Obsidian-free string in and out precisely so
+ * the two stay comparable line for line.
+ */
+function stripLegacyIndexFrontmatter(currentText: string): string {
 	const fmMatch = currentText.match(/^---\n[\s\S]*?\n---\n/);
-	if (!fmMatch) return;
+	if (!fmMatch) return currentText;
 	let isOurs = false;
 	try {
 		isOurs = parseFrontmatter(currentText) !== null;
@@ -132,11 +160,10 @@ async function ensureFolderNote(ref: SpaceRef, app: App): Promise<void> {
 		// since a person's own frontmatter would not have got far enough into the parse to throw.
 		isOurs = /^---\naetherweb_schema: /.test(currentText);
 	}
-	if (!isOurs) return;
+	if (!isOurs) return currentText;
 
 	const rest = currentText.slice(fmMatch[0].length).replace(/^\n+/, "");
-	await app.vault.modify(existing, rest.length > 0 ? rest : renderBody(DEFAULT_STATEMENT_PLACEHOLDER).trimStart() + "\n");
-	await recordFileContentSpin(ref, "file_modified", relativePath(ref, existing), existing, "observed", app);
+	return rest.length > 0 ? rest : renderBody(DEFAULT_STATEMENT_PLACEHOLDER).trimStart() + "\n";
 }
 
 /**
@@ -177,6 +204,57 @@ export async function writeStatement(
 	// same content hash already recorded and stands down (core/guards.ts).
 	const spin = await recordFileContentSpin(ref, "file_modified", relativePath(ref, existing), existing, "observed", app);
 	if (spin) await regenerateContext(ref, app);
+}
+
+/**
+ * Writes into a space's shared block — the region the person and an agent both hold.
+ *
+ * `mode` defaults to appending, and that default is the substance of the feature rather than a
+ * convenience. Replacing a region held in common requires re-emitting the person's own words, which
+ * is the operation most likely to come back subtly reworded; appending cannot reword anything. A
+ * caller that genuinely means to rewrite the whole block — consolidating a list it wrote itself,
+ * say — asks for it explicitly.
+ *
+ * Unlike `writeStatement`, this does not require the block to exist: a folder note written before
+ * the shared region existed gets one here rather than an error, since there is nothing for the
+ * person to have done wrong.
+ */
+export async function writeShared(
+	ref: SpaceRef,
+	text: string,
+	app: App,
+	agent: string,
+	mode: "append" | "replace" = "append",
+): Promise<void> {
+	const existing = app.vault.getAbstractFileByPath(ref.contextPath);
+	if (!(existing instanceof TFile)) {
+		throw new Error(`[AethersWeb] cannot write shared block: no folder note at ${ref.contextPath}`);
+	}
+	const current = await app.vault.read(existing);
+	const atTip = await readHead(ref, app);
+	const final =
+		mode === "append"
+			? appendToSharedBlock(current, text, agent, atTip, ref.contextPath)
+			: writeSignedBlock(current, text, "shared", agent, atTip, ref.contextPath);
+	if (final === current) return; // nothing new to add — signature and verification preserved
+
+	await app.vault.modify(existing, final);
+
+	// Logged as an ordinary file_modified on the folder note, exactly like a statement write. The
+	// shared block is not a separate artifact with a history of its own; it is part of a file the
+	// person also writes in, and the log already records that file changing.
+	const spin = await recordFileContentSpin(ref, "file_modified", relativePath(ref, existing), existing, "observed", app);
+	if (spin) await regenerateContext(ref, app);
+}
+
+/** The shared block's prose and signature, or null when the note has no shared block. */
+export async function readShared(
+	ref: SpaceRef,
+	app: App,
+): Promise<{ text: string; signature: StatementSignature | null } | null> {
+	const file = app.vault.getAbstractFileByPath(ref.contextPath);
+	if (!(file instanceof TFile)) return null;
+	return readSignedBlock(await app.vault.read(file), "shared");
 }
 
 /**

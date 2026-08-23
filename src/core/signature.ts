@@ -1,4 +1,5 @@
 import { SIGNATURE_MARKER_PREFIX, SIGNATURE_MARKER_SUFFIX } from "./constants";
+import type { BlockKind } from "./constants";
 import { sha256Hex } from "./hash";
 
 /**
@@ -89,15 +90,45 @@ export function parseSignatureMarker(blockInner: string): StatementSignature | n
  * unconfirmed content is described as unconfirmed either way. It defaults to true so that content
  * whose placement is unknown is treated as content someone has to stand behind — see
  * `requiresVerification` in `statement.ts`, which is the one place that decides this.
+ *
+ * `kind` changes the wording for two reasons, and no further — the hashes underneath are identical
+ * either way, only the sentence differs:
+ *
+ * - A shared block is not the agent's to sign as its own. The line reports who wrote there *last*,
+ *   never that the text is AI-written, because the sentence above the signature may well be the
+ *   person's.
+ * - Prose that no longer matches its signature is, in a shared block, the region working exactly
+ *   as intended: someone wrote in it, which is the point of holding one in common. Reporting that
+ *   as "this signature no longer covers it" would read as damage and invite them to undo their own
+ *   writing.
  */
 export function renderSignatureFooter(
 	sig: StatementSignature,
 	status: SignatureStatus,
 	verificationRequired = true,
+	kind: BlockKind = "statement",
 ): string {
 	const written = sig.written_at.slice(0, 10);
-	const head = `*— AI-written by \`${sig.agent}\`, ${written}.`;
 
+	if (kind === "shared") {
+		// Deliberately not "AI-written by": a shared block is not the agent's to claim. The
+		// signature records who wrote here last and what the block hashed to at that moment, and
+		// that is exactly what this says. Anything stronger would put the person's own sentences
+		// under an AI byline the first time an agent added a line beneath them.
+		const head = `*— Shared block: yours and the agent’s. Last agent write by \`${sig.agent}\`, ${written}`;
+		switch (status) {
+			case "verified":
+				return `${head}; verified by ${sig.verified?.by} on ${sig.verified?.at.slice(0, 10)}.*`;
+			case "stale_verification":
+				return `${head}; verified by ${sig.verified?.by}, written in since.*`;
+			case "stale_signature":
+				return `${head}; written in since.*`;
+			default:
+				return `${head}. Write in it freely — nothing here is regenerated over.*`;
+		}
+	}
+
+	const head = `*— AI-written by \`${sig.agent}\`, ${written}.`;
 	switch (status) {
 		case "verified":
 			return `${head} Verified by ${sig.verified?.by} on ${sig.verified?.at.slice(0, 10)}.*`;

@@ -26,9 +26,56 @@ export const STALE_LOCK_MS = 30_000;
  */
 export const CONTEXT_SCHEMA_VERSION = 2;
 
+/**
+ * A folder note has three regions, and which one a stretch of text sits in is the whole answer to
+ * "whose words are these":
+ *
+ * - **statement** — the AI's. Regenerated from the log whenever the space moves on. A person can
+ *   type in it, but nothing promises to keep what they typed; the next statement replaces it.
+ * - **shared** — both. An agent may write here and so may the person, and neither side's writing
+ *   is treated as an intrusion on the other's. This is the only region where an AI write is
+ *   expected to arrive on top of a person's words and vice versa.
+ * - **everything else** — the person's, untouchable. No AI write reaches outside a block.
+ *
+ * The shared region exists because the other two leave nothing in between. Anything an agent needs
+ * to leave behind that is *not* derived from the log — a question it wants answered, a running
+ * checklist, notes toward the next session — had only two homes: inside the statement, where the
+ * next regeneration silently eats it, or nowhere. And anything the person wanted to say *to* the
+ * agent, at a place the agent would reliably look, had no home at all. Same file, same note, one
+ * region deliberately held in common.
+ */
+export type BlockKind = "statement" | "shared";
+
 /** Sentinel markers delimiting the AI state statement inside a context note's body. */
 export const STATEMENT_START_MARKER = "<!-- AETHERWEB:STATEMENT:START -->";
 export const STATEMENT_END_MARKER = "<!-- AETHERWEB:STATEMENT:END -->";
+
+/**
+ * Sentinel markers delimiting the shared region — written by agents and by the person, in the same
+ * block, with no claim by either that the other's edits are damage to be undone.
+ */
+export const SHARED_START_MARKER = "<!-- AETHERWEB:SHARED:START -->";
+export const SHARED_END_MARKER = "<!-- AETHERWEB:SHARED:END -->";
+
+/** Start/end markers by region, so no caller has to pick a pair by hand. */
+export const BLOCK_MARKERS: Record<BlockKind, { start: string; end: string }> = {
+	statement: { start: STATEMENT_START_MARKER, end: STATEMENT_END_MARKER },
+	shared: { start: SHARED_START_MARKER, end: SHARED_END_MARKER },
+};
+
+/**
+ * Every sentinel that must never appear inside content written into a block. All four block
+ * markers, not just the enclosing pair: text inside a statement carrying a shared START marker
+ * would conjure a shared region inside AI-only prose, and the reverse hides shared text inside
+ * something regeneration overwrites. The signature prefix is here because content carrying one
+ * forges its own attribution.
+ */
+export const RESERVED_MARKERS = [
+	STATEMENT_START_MARKER,
+	STATEMENT_END_MARKER,
+	SHARED_START_MARKER,
+	SHARED_END_MARKER,
+];
 
 /**
  * Carries the machine-readable signature for the AI content in a block. Lives inside the block,
@@ -37,6 +84,17 @@ export const STATEMENT_END_MARKER = "<!-- AETHERWEB:STATEMENT:END -->";
  */
 export const SIGNATURE_MARKER_PREFIX = "<!-- AETHERWEB:SIGNATURE ";
 export const SIGNATURE_MARKER_SUFFIX = " -->";
+
+/**
+ * A fresh shared block's contents. Written once, at creation, and then owned by whoever writes in
+ * it next — regeneration never restores it, because restoring it would mean deleting whatever the
+ * two sides put there.
+ */
+export const DEFAULT_SHARED_PLACEHOLDER =
+	"*(Shared space. You and any agent working in this vault can both write here, and neither " +
+	"side's words get overwritten as a matter of course — unlike the statement above, which is " +
+	"regenerated from this space's log. Open questions, running notes, things you want an agent " +
+	"to know before it writes about this space.)*";
 
 export const DEFAULT_STATEMENT_PLACEHOLDER =
 	"*(No AI state statement has been generated yet for this space. This section will be " +

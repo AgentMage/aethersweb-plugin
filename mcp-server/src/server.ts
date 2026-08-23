@@ -27,6 +27,7 @@ import { registerReconcileSpaceTool } from "./tools/reconcile-space";
 import { registerRegenerateContextTool } from "./tools/regenerate-context";
 import { registerVerifyChainTool } from "./tools/verify-chain";
 import { registerDeleteFileTool, registerWriteFileTool } from "./tools/write-file";
+import { registerWriteSharedTool } from "./tools/write-shared";
 import { registerWriteStatementTool } from "./tools/write-statement";
 
 /**
@@ -65,6 +66,7 @@ export function buildServer(vaultRoot: string): McpServer {
 	// Derived artifacts and catch-up.
 	registerRegenerateContextTool(server, vaultRoot);
 	registerWriteStatementTool(server, vaultRoot);
+	registerWriteSharedTool(server, vaultRoot);
 	registerReconcileSpaceTool(server, vaultRoot);
 	registerAppendSpinTool(server, vaultRoot);
 

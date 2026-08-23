@@ -50,14 +50,19 @@ writers from silently drifting apart.
 - `rename-echo.ts` — recognizes the descendant rename events a folder move emits.
 - `diff.ts`, `content-fold.ts`, `fold-files.ts` — diffing, and replaying a log into last-known
   content and last-known file state.
-- `statement.ts` — the containment boundary: AI-generated content is always inside an
-  `AETHERSWEB:STATEMENT` block, marker injection is refused, and authored writes are scoped to the
-  block so human writing in the same file is never clobbered. Every AI write routes through here.
+- `statement.ts` — the containment boundary: AI-generated content is always inside a marked block,
+  marker injection is refused, and authored writes are scoped to the block so human writing in the
+  same file is never clobbered. Every AI write routes through here. Two kinds of block, one
+  implementation parameterized by `BlockKind`: the **statement** block, AI-only and regenerated
+  from the log, and the **shared** block, which the person and an agent both write in and nothing
+  regenerates. Everything outside both is the person's and unreachable from here.
 - `signature.ts` — who wrote AI content, when, against what, and whether a person has confirmed it.
   Verification records the hash actually read, so editing the prose lapses approval automatically.
   Writing a verification is plugin-only: an agent confirming its own output means nothing. Only
   content outside a space's folder note is held for confirmation — `requiresVerification` in
-  `statement.ts` decides that, since a statement is derived from the log and regenerated with it.
+  `statement.ts` decides that, since a statement is derived from the log and regenerated with it,
+  and a shared block is as much the person's to write as the agent's. A shared block's visible line
+  says who wrote there *last*, never that the text is AI-written.
 - `context-format.ts` — deterministic context-note serialization and its exact inverse.
 
 ### Plugin — `src/`
@@ -67,7 +72,7 @@ writers from silently drifting apart.
 - `events.ts` — live vault events → `observed` spins. See CLAUDE.md's rules before editing.
 - `reconcile.ts` — filesystem-vs-log diff → `detected` spins; also claims unmanaged folders.
 - `log.ts` — `.aether/` I/O, the per-space lock, and the only write path into a chain.
-- `context.ts` — context regeneration and statement writing.
+- `context.ts` — context regeneration, statement writing, and shared-block writing.
 - `content-record.ts` — builds the content payload for create/modify spins.
 - `space.ts` — space detection, tree walking, owner resolution, file hashing.
 - `bootstrap.ts` — space scaffolding.

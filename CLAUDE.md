@@ -50,9 +50,19 @@ Read `Spec.md` for the real thing. The parts most often got wrong in code:
   the same reason `.aether/head` isn't: it is a cache of what the log already says, not content.
   Its `source_tip`/`generated_at` change purely as a side effect of writing, so an index that were
   itself logged could never settle. `<Folder>/<Folder>.md` is the **folder note**: an ordinary note
-  the person writes in, logged like any other file, which also holds the AI statement inside its
-  marked block. Regeneration only ever creates that note or strips a pre-split note's leftover
-  frontmatter — everything else in it is theirs.
+  the person writes in, logged like any other file, which also holds the two marked blocks.
+  Regeneration only ever creates that note, creates its shared block, or strips a pre-split note's
+  leftover frontmatter — everything else in it is theirs.
+- **The folder note has three regions, not two.** The **statement** block is the AI's and is
+  regenerated from the log whenever the space moves on — nothing left there survives. The **shared**
+  block (`AETHERWEB:SHARED`, `write_shared`) is held in common: an agent writes in it, so does the
+  person, and nothing regenerates it. **Everything outside both blocks is the person's** and no AI
+  write reaches it. The shared region exists because the other two left nothing in between — an
+  open question, a thread for the next session, or a note the person wants an agent to read first
+  had either a home that gets eaten or no home at all. Appending is the default there and replacing
+  is opt-in: a replace can only preserve someone's words by re-emitting them, and quietly
+  paraphrasing a person's own sentences back at them is the one failure nothing here can detect
+  afterward. `core/statement.ts` implements both kinds once, parameterized by `BlockKind`.
 - **The log carries real content**, not just hashes: full content on create, unified diffs on text
   change, full snapshots for binary. `verifyContentReplay` enforces that replay reproduces the
   recorded hash. (The original spec said hashes-only; that was deliberately reversed.)
@@ -89,12 +99,13 @@ statement that resolves every gap instead of naming it has failed, however well 
 
 This is why statement generation is agent-driven and why no LLM call happens inside the MCP server.
 
-**AI-generated content is contained, signed, and verifiable** — statements and authored files
-alike. `core/statement.ts` constructs/locates/replaces blocks; `core/signature.ts` owns attribution
-and verification. Route every AI write through them.
+**AI-generated content is contained, signed, and verifiable** — statements, shared blocks and
+authored files alike. `core/statement.ts` constructs/locates/replaces blocks; `core/signature.ts`
+owns attribution and verification. Route every AI write through them.
 
-- Text carrying a statement or signature marker verbatim is refused — it would terminate its own
-  block early or forge its own verification.
+- Text carrying any block marker or the signature marker verbatim is refused — both block kinds, not
+  just the enclosing pair. It would terminate its own block early, conjure a region with the wrong
+  rules inside one with the right ones, or forge its own verification.
 - Authored writes are scoped to the block, never the file: content outside is preserved, and a file
   with no block gets one appended rather than taken over.
 - Every AI write is signed with a self-declared `agent`, a timestamp, the tip, and a hash of the
@@ -108,8 +119,12 @@ and verification. Route every AI write through them.
 - **Confirmation is only asked for outside the folder note.** `requiresVerification` (`core/
   statement.ts`) is the one place that decides it. An authored file is derived from nothing and
   stays pending until a person stands behind it; a statement is rebuilt from the log whenever the
-  space moves on, so `unverified` is its normal state, not a task. Signed and attributed either way
-  — only the ask differs. Never prompt, list, or nag on a folder note's statement.
+  space moves on, so `unverified` is its normal state, not a task; a shared block is as much the
+  person's to write as the agent's, so asking them to certify it would make every note they leave an
+  outstanding task. Signed and attributed either way — only the ask differs. Never prompt, list, or
+  nag on a folder note's statement or its shared block. A shared block's visible line reports who
+  wrote there *last* rather than claiming the text is AI-written, and prose that no longer matches
+  its signature hash there means someone wrote in it — the region working, not damage.
 - Re-writing byte-identical prose is a no-op preserving signature and verification. Do not
   reintroduce a fresh timestamp per write: it defeats no-op suppression and silently discards
   approval.

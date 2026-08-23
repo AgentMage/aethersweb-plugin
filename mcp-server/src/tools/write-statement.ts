@@ -31,9 +31,13 @@ export function registerWriteStatementTool(server: McpServer, vaultRoot: string)
 			title: "Write a space's AI state statement",
 			description:
 				"Writes new AI-generated statement text into a space's folder note (between the " +
-				"sentinel markers). Everything outside that block is the person's own writing about the " +
-				"space and is preserved byte for byte — read it, take it seriously, and never " +
-				"contradict it silently.\n\n" +
+				"sentinel markers). Everything outside that block is preserved byte for byte, and it " +
+				"is not all the same thing: the shared block is yours and the user's both — write " +
+				"there with write_shared — and the rest of the note is the user's own writing about " +
+				"the space, which you cannot write in at all. Read both, take them seriously, and " +
+				"never contradict them silently.\n\n" +
+				"This block is regenerated. Anything that has to outlive the next statement — an open " +
+				"question, a thread for the next session — belongs in write_shared, not here.\n\n" +
 				"Before generating: call read_context on this space, then read the parent's context " +
 				"and list_spaces around it (siblings, subspaces). Do not generate from this space's " +
 				"own context alone.\n\n" +

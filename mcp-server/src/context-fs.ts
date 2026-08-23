@@ -3,7 +3,16 @@ import { dirname } from "node:path";
 import { CONTEXT_SCHEMA_VERSION, DEFAULT_STATEMENT_PLACEHOLDER } from "../../src/core/constants";
 import { describeStatementDrift, spinsSinceStatement } from "../../src/core/drift";
 import type { StatementDriftFacts } from "../../src/core/drift";
-import { findStatementBlock, readSignedStatement, writeSignedStatement } from "../../src/core/statement";
+import {
+	appendToSharedBlock,
+	ensureSharedBlock,
+	findStatementBlock,
+	readSignedBlock,
+	readSignedStatement,
+	writeSignedBlock,
+	writeSignedStatement,
+} from "../../src/core/statement";
+import type { StatementSignature } from "../../src/core/signature";
 import { buildIndexText, parseFrontmatter, renderBody, stringifyFrontmatter } from "../../src/core/context-format";
 import type { ContextFileEntry, ContextFrontmatter, ContextSubspaceEntry } from "../../src/core/types";
 import { hashFileFs, immediateFilesFs, immediateSubspacesFs, relativePathFs } from "./space-fs";
@@ -82,12 +91,14 @@ export async function regenerateContextFs(vaultRoot: string, ref: SpaceRefFs): P
 }
 
 /**
- * Makes sure the folder note exists and carries a statement block — and, for a note written before
- * the index moved into `.aether/`, strips the now-obsolete frontmatter it still carries.
+ * Makes sure the folder note exists and carries both of its blocks — the statement and the shared
+ * region — and, for a note written before the index moved into `.aether/`, strips the now-obsolete
+ * frontmatter it still carries.
  *
  * The *only* thing regeneration does to the folder note, deliberately as close to nothing as
- * possible: everything in that file outside the statement block belongs to the person who wrote
- * it. Mirrors src/context.ts::ensureFolderNote.
+ * possible: everything in that file outside the two blocks belongs to the person who wrote it.
+ * Mirrors src/context.ts::ensureFolderNote, including creating the shared block empty rather than
+ * waiting for an agent to write in it — see core/statement.ts::ensureSharedBlock.
  */
 async function ensureFolderNoteFs(ref: SpaceRefFs): Promise<void> {
 	const relPath = relativePathFs(ref, ref.contextPath);
@@ -100,23 +111,35 @@ async function ensureFolderNoteFs(ref: SpaceRefFs): Promise<void> {
 		return;
 	}
 
-	// One-time migration, self-limiting: strip a leading frontmatter block only when it parses as
-	// *our own* index shape. A person's own YAML frontmatter fails that parse and is left alone.
 	const currentText = await readFile(ref.contextPath, "utf8");
+	// One write, one spin, for both fixes — see the plugin's mirror of this for why.
+	const migrated = stripLegacyIndexFrontmatterFs(currentText);
+	const withShared = ensureSharedBlock(migrated) ?? migrated;
+	if (withShared === currentText) return;
+
+	await writeFile(ref.contextPath, withShared, "utf8");
+	await recordWrittenFile(ref, relPath, ref.contextPath, "file_modified", "observed");
+}
+
+/**
+ * Strips the leading frontmatter block from a pre-split folder note, or returns the text unchanged.
+ * One-time migration, self-limiting: strips only when the block parses as *our own* index shape. A
+ * person's own YAML frontmatter fails that parse and is left alone. Mirrors
+ * src/context.ts::stripLegacyIndexFrontmatter.
+ */
+function stripLegacyIndexFrontmatterFs(currentText: string): string {
 	const fmMatch = currentText.match(/^---\n[\s\S]*?\n---\n/);
-	if (!fmMatch) return;
+	if (!fmMatch) return currentText;
 	let isOurs = false;
 	try {
 		isOurs = parseFrontmatter(currentText) !== null;
 	} catch {
 		isOurs = /^---\naetherweb_schema: /.test(currentText);
 	}
-	if (!isOurs) return;
+	if (!isOurs) return currentText;
 
 	const rest = currentText.slice(fmMatch[0].length).replace(/^\n+/, "");
-	const replacement = rest.length > 0 ? rest : renderBody(DEFAULT_STATEMENT_PLACEHOLDER).trimStart() + "\n";
-	await writeFile(ref.contextPath, replacement, "utf8");
-	await recordWrittenFile(ref, relPath, ref.contextPath, "file_modified", "observed");
+	return rest.length > 0 ? rest : renderBody(DEFAULT_STATEMENT_PLACEHOLDER).trimStart() + "\n";
 }
 
 /**
@@ -159,6 +182,58 @@ export async function writeStatementFs(
 	// That spin advanced this space's head, so the index now trails it — regenerate for the same
 	// reason every other authoring path does. Mirrors src/context.ts::writeStatement.
 	if (spin) await regenerateContextFs(vaultRoot, ref);
+}
+
+/**
+ * Writes into a space's shared block — mirrors context.ts::writeShared.
+ *
+ * Appending is the default and replacing is opt-in, for the reason spelled out on
+ * `appendToSharedBlock`: a replace can only preserve the person's writing by re-emitting it, and
+ * quietly paraphrasing someone's own words back at them is the one failure this codebase has no way
+ * to detect after the fact. Appending is incapable of it.
+ *
+ * Unlike writeStatementFs, a missing shared block is not an error — a folder note written before
+ * the shared region existed gets one here.
+ */
+export async function writeSharedFs(
+	vaultRoot: string,
+	ref: SpaceRefFs,
+	text: string,
+	agent: string,
+	mode: "append" | "replace" = "append",
+): Promise<void> {
+	if (!(await exists(ref.contextPath))) {
+		throw new Error(`[aethersweb-mcp-server] cannot write shared block: no folder note at ${ref.contextPath}`);
+	}
+	const current = await readFile(ref.contextPath, "utf8");
+	const atTip = await readHeadFs(ref);
+	const final =
+		mode === "append"
+			? appendToSharedBlock(current, text, agent, atTip, ref.contextPath)
+			: writeSignedBlock(current, text, "shared", agent, atTip, ref.contextPath);
+	if (final === current) return; // nothing new to add — signature and verification preserved
+
+	await writeFile(ref.contextPath, final, "utf8");
+	const spin = await recordWrittenFile(
+		ref,
+		relativePathFs(ref, ref.contextPath),
+		ref.contextPath,
+		"file_modified",
+		"observed",
+		agent,
+	);
+	if (spin) await regenerateContextFs(vaultRoot, ref);
+}
+
+/** The shared block's prose and signature, or null when the note has no shared block. */
+export async function readSharedFs(
+	ref: SpaceRefFs,
+): Promise<{ text: string; signature: StatementSignature | null } | null> {
+	try {
+		return readSignedBlock(await readFile(ref.contextPath, "utf8"), "shared");
+	} catch {
+		return null;
+	}
 }
 
 export interface SubspaceStaleness {

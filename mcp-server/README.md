@@ -131,28 +131,58 @@ person sees exactly what would be quarantined before confirming.
   Never logged and never settles into the log — that placement is what keeps `source_tip`/
   `generated_at` from chasing their own writes. Touches the folder note only to create it when
   absent (or strip a pre-split note's leftover frontmatter); everything else there is the person's.
-- **`write_statement`** — writes statement text into the folder note's marked block, preserving
-  every byte the person wrote around it, and records the write as an ordinary `file_modified`. The
+- **`write_statement`** — writes statement text into the folder note's statement block, preserving
+  every byte around it, and records the write as an ordinary `file_modified`. The
   tip it was generated against lives in the signature's `at_tip`, not a separate field. Pass
   `expect_tip` with the head you read before generating, and the write is refused if the space
   moved on meanwhile — otherwise a slow generation signs as current a statement that never saw the
   changes it now claims to cover.
+- **`write_shared`** — writes into the folder note's **shared block**, the third region, which the
+  person and an agent both hold. Nothing regenerates it, so this is where anything that has to
+  outlive the next statement goes: an open question, a thread for the next session, a correction
+  you are not certain enough to assert. `mode` defaults to `append`, which leaves what is already
+  in the block untouched; `replace` rewrites the whole thing, the person's words included, and is
+  only for consolidating text you put there yourself. Read it first — `describe_space` and
+  `read_context` both return it as `shared_text`, and what the person left there is addressed to
+  whoever works in the space next.
 - **`reconcile_space`** — the server's own catch-up pass, since the plugin's only runs inside
   Obsidian. Emits `detected` spins for anything that drifted. Never infers renames.
 - **`append_spin`** — a narrow escape hatch. It writes what it is told, so anything it records is a
   claim rather than a verified fact; it accepts only spin types that describe the log itself. Use
   the authoring tools to change the vault and `reconcile_space` to record what something else did.
 
+## The folder note's three regions
+
+`<Space>/<Space>.md` has three regions, and which one text sits in is the whole answer to whose
+words it is:
+
+| region | markers | who writes | regenerated |
+|---|---|---|---|
+| statement | `AETHERWEB:STATEMENT` | agents (`write_statement`) | yes — rewritten whenever the space moves on |
+| shared | `AETHERWEB:SHARED` | agents (`write_shared`) **and** the person | never |
+| everything else | — | the person only | never; no AI write can reach it |
+
+The shared region exists because the other two left nothing in between. Anything an agent needed to
+leave behind that was *not* derived from the log had two homes — inside the statement, where the
+next regeneration silently eats it, or nowhere — and anything the person wanted to say *to* an
+agent, somewhere it would reliably be read, had none at all.
+
+A shared block is signed like any other AI write, but its visible line reports who wrote there
+**last** rather than claiming the text is AI-written, because the sentence above it may well be the
+person's. Prose that no longer matches its signature hash means, in a shared block, that someone
+wrote in it — the region working as designed, not damage.
+
 ## Containment, signature, verification
 
 **Every tool that writes AI-generated content contains it, signs it, and leaves it unverified.**
-`write_statement` and `write_file` both require an `agent` identity and route through
+`write_statement`, `write_shared` and `write_file` all require an `agent` identity and route through
 `../src/core/statement.ts` and `../src/core/signature.ts`.
 
-- **Contained** in an `AETHERSWEB:STATEMENT` block, with the write scoped to the block so a person's
-  own writing in the same file is never clobbered. Text carrying a marker verbatim is refused: an
-  injected END marker terminates the block early, and the remainder then reads as the person's own
-  writing to every consumer that locates a block with `indexOf`.
+- **Contained** in a marked block, with the write scoped to that block so writing outside it is
+  never clobbered. Text carrying any block marker verbatim is refused — both kinds, not just the
+  enclosing pair: an injected END marker terminates the block early and the remainder then reads as
+  the person's own writing to every consumer that locates a block with `indexOf`, while an injected
+  marker of the *other* kind conjures a region with the wrong rules inside one with the right ones.
 - **Signed** with your agent id, a timestamp, the tip, and a hash of the prose — plus a visible line
   in the note saying so. Formats that cannot carry an HTML comment (JSON, CSV, binary) are written
   as-is and attributed in the log via the spin's `authored_by`. Never nowhere.
@@ -165,7 +195,9 @@ person sees exactly what would be quarantined before confirming.
 Only a file you author through `write_file` is actually **held** for the person's confirmation. A
 statement is derived from the log and regenerated with it, so `unverified` is its ordinary state —
 report it, but never hand the user "go verify this statement" as a task. `stale_signature` on a
-statement means they edited the prose by hand: those words are theirs.
+statement means they edited the prose by hand: those words are theirs. A shared block is never held
+either, for a reason of its own: the person is a writer in that region, not a reviewer of it, and
+asking them to certify it would turn every note they leave for an agent into an outstanding task.
 
 Verification records the hash the person actually read, so editing the prose afterward lapses it
 automatically. Re-writing byte-identical prose is a no-op that preserves both signature and

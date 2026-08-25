@@ -1,9 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { Spin } from "../../../src/core/types";
 import { buildSpaceRefFs, isSpaceFs } from "../space-fs";
 import { readLogFs } from "../vault-io";
 import { notASpace, ok, SPACE_PATH_DESC } from "./helpers";
+import { viewSpin } from "./spin-view";
 
 /**
  * Reads what actually happened in a space.
@@ -48,30 +48,8 @@ export function registerReadLogTool(server: McpServer, vaultRoot: string): void 
 				total_spins: full.length,
 				returned: page.length,
 				has_earlier: page.length > 0 && page[0].seq > 0,
-				spins: include_content ? page : page.map(stripContent),
+				spins: page.map((spin) => viewSpin(spin, { content: include_content, diff: include_content })),
 			});
 		},
 	);
-}
-
-/**
- * A spin as returned when content is excluded. Deliberately its own type rather than a `Spin` with
- * fields bolted on: `content_omitted` is a fact about this response, not about the log, and
- * `Spin` is the shape the hash chain is computed over.
- */
-type SpinView = Omit<Spin, "payload"> & {
-	payload: Omit<Spin["payload"], "content" | "diff"> & {
-		content_omitted?: true;
-		content_bytes?: number;
-	};
-};
-
-/** Keeps every field that says *what happened*, drops the bytes that say *what it contained*. */
-function stripContent(spin: Spin): SpinView {
-	const { content, diff, ...payload } = spin.payload;
-	const omitted = content ?? diff;
-	return {
-		...spin,
-		payload: omitted === undefined ? payload : { ...payload, content_omitted: true, content_bytes: omitted.length },
-	};
 }

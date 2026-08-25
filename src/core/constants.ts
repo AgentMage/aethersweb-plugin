@@ -103,6 +103,18 @@ export const DEFAULT_STATEMENT_PLACEHOLDER =
 	"outside these markers once statement generation is wired up.)*";
 
 /**
+ * Each region's own "nobody has written here yet" boilerplate, by kind.
+ *
+ * An append into a block needs to recognize the placeholder it is landing on, so the first real
+ * entry replaces the boilerplate instead of stacking underneath a sentence that has just become
+ * false. Only `appendToBlock` reads this — see core/statement.ts.
+ */
+export const DEFAULT_BLOCK_PLACEHOLDER: Record<BlockKind, string> = {
+	statement: DEFAULT_STATEMENT_PLACEHOLDER,
+	shared: DEFAULT_SHARED_PLACEHOLDER,
+};
+
+/**
  * Filenames that are never user content, whatever folder they turn up in. Dotted names don't
  * need listing here — `core/ignore.ts` drops every dotted path segment wholesale.
  */

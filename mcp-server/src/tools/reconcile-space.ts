@@ -38,7 +38,17 @@ export function registerReconcileSpaceTool(server: McpServer, vaultRoot: string)
 
 			const spaces = Array.from(results.entries()).map(([path, spins]) => ({
 				space_path: path,
-				spins: spins.map((s) => ({ seq: s.seq, spin_type: s.spin_type, path: s.payload.path ?? s.payload.subspace_name })),
+				// Deliberately not viewSpin: a first-time reconcile can emit hundreds of spins, and two
+				// 64-char hashes apiece would make this response the thing it is meant to keep small.
+				// `source` is carried explicitly — that every one of these is `detected` is the single
+				// most important fact about them, and it must live in the data, not only in this
+				// tool's description.
+				spins: spins.map((s) => ({
+					seq: s.seq,
+					spin_type: s.spin_type,
+					source: s.source,
+					path: s.payload.path ?? s.payload.subspace_name,
+				})),
 			}));
 			const total = spaces.reduce((sum, s) => sum + s.spins.length, 0);
 			return ok({ reconciled: space_path, recursive, total_spins: total, spaces });

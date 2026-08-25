@@ -1,5 +1,6 @@
 import {
 	BLOCK_MARKERS,
+	DEFAULT_BLOCK_PLACEHOLDER,
 	RESERVED_MARKERS,
 	DEFAULT_SHARED_PLACEHOLDER,
 	SIGNATURE_MARKER_PREFIX,
@@ -249,23 +250,48 @@ export function writeSignedStatement(
 }
 
 /**
- * Adds to the shared block rather than replacing it — the default way an agent writes there.
+ * Adds to a block instead of replacing it.
  *
- * A full replace is the wrong default for a region held in common, and not by a small margin. To
- * replace it safely an agent would have to read the person's writing and re-emit it verbatim
- * alongside its own, which is exactly the operation a language model performs least reliably: the
- * failure mode is not a crash but a quiet paraphrase of someone's own words back at them, with a
- * signature underneath. Appending cannot do that. What was there stays byte for byte, and the
- * agent's contribution lands beneath it.
+ * Two callers, two different reasons, and they are worth keeping apart.
  *
- * The starting placeholder is the one thing this does overwrite. It is the system's own boilerplate
- * announcing that nobody has written here yet — leaving it stranded above the first real entry
- * would be keeping a sentence that has become false.
+ * For the **shared** region this is the default, because a full replace is the wrong default for
+ * anything held in common. To replace it safely an agent would have to read the person's writing
+ * and re-emit it verbatim alongside its own, which is exactly the operation a language model
+ * performs least reliably: the failure is not a crash but a quiet paraphrase of someone's own words
+ * back at them, with a signature underneath. Appending cannot do that. What was there stays byte
+ * for byte, and the agent's contribution lands beneath it.
+ *
+ * For an authored file's **statement** block it is opt-in, and it buys something else entirely.
+ * Nothing in that block is the person's, so the paraphrase risk does not apply — what append avoids
+ * is having to resend a whole note to add a paragraph to it, on the wire and in the diff the log
+ * records. A note that grows a line a day should cost a line a day.
+ *
+ * The starting placeholder is the one thing this overwrites. It is the system's own boilerplate
+ * announcing that nobody has written here yet; leaving it stranded above the first real entry would
+ * be keeping a sentence that has become false.
  *
  * Re-appending text already sitting at the end of the block is a no-op, for the same reason
- * re-writing identical statement prose is: an agent retrying a call should not leave the person
- * reading the same paragraph twice.
+ * re-writing identical prose is: an agent retrying a call should not leave the person reading the
+ * same paragraph twice.
  */
+export function appendToBlock(
+	noteText: string,
+	text: string,
+	kind: BlockKind,
+	agent: string,
+	atTip: string | null,
+	path: string,
+): string {
+	assertContainable(text);
+	const addition = text.trim();
+	const existing = readSignedBlock(noteText, kind);
+	const prior = existing && existing.text !== DEFAULT_BLOCK_PLACEHOLDER[kind] ? existing.text.trim() : "";
+	if (prior.length > 0 && prior.endsWith(addition)) return noteText;
+	const combined = prior.length > 0 ? `${prior}\n\n${addition}` : addition;
+	return replaceBlock(noteText, combined, kind, buildSignature(combined, agent, atTip), path);
+}
+
+/** `appendToBlock` for the shared region — the region where appending is the default. */
 export function appendToSharedBlock(
 	noteText: string,
 	text: string,
@@ -273,13 +299,7 @@ export function appendToSharedBlock(
 	atTip: string | null,
 	path: string,
 ): string {
-	assertContainable(text);
-	const addition = text.trim();
-	const existing = readSignedBlock(noteText, "shared");
-	const prior = existing && existing.text !== DEFAULT_SHARED_PLACEHOLDER ? existing.text.trim() : "";
-	if (prior.length > 0 && prior.endsWith(addition)) return noteText;
-	const combined = prior.length > 0 ? `${prior}\n\n${addition}` : addition;
-	return replaceBlock(noteText, combined, "shared", buildSignature(combined, agent, atTip), path);
+	return appendToBlock(noteText, text, "shared", agent, atTip, path);
 }
 
 /**

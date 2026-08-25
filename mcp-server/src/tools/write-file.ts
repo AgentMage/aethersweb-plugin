@@ -6,6 +6,7 @@ import { appendFileDeletedFs } from "../vault-io";
 import { StatementContainmentError } from "../../../src/core/statement";
 import { removeFileFs, writeFileFs, WriteError } from "../write-fs";
 import { fail, notASpace, ok, SPACE_PATH_DESC } from "./helpers";
+import { viewSpin } from "./spin-view";
 
 /**
  * Writing a file and recording that it was written are one operation here, not two.
@@ -44,8 +45,16 @@ export function registerWriteFileTool(server: McpServer, vaultRoot: string): voi
 				"derived from the log and regenerated with it — an authored file is held for the " +
 				"person: it stands unverified until they confirm it in Obsidian. You cannot verify " +
 				"your own output; that is the point of the record.\n\n" +
+				"mode defaults to \"replace\", which rewrites the whole block. Use \"append\" to add " +
+				"beneath what the block already holds — your text lands under it with a blank line " +
+				"between, and you send only the new part rather than the whole note. Append is refused " +
+				"for JSON, CSV and binary, which have no block to append to. Either way the block is " +
+				"re-signed, so a person's earlier verification of it lapses.\n\n" +
 				"Returns spin: null when the resulting file is byte-identical to what the log already " +
-				"holds. The path is relative to the space and may not reach into a subspace.",
+				"holds. The path is relative to the space and may not reach into a subspace.\n\n" +
+				"The response carries metadata only: the recorded content and diff are left out, since " +
+				"they are the text you just sent. The log still records both in full — read them back " +
+				"with read_log(include_content: true), or set return_content / return_diff here.",
 			inputSchema: {
 				space_path: z.string().describe(SPACE_PATH_DESC),
 				path: z.string().describe('Path relative to the space, e.g. "GPS.md".'),
@@ -56,22 +65,43 @@ export function registerWriteFileTool(server: McpServer, vaultRoot: string): voi
 					.string()
 					.describe('Identify yourself for the signature, e.g. "claude-opus-5". Recorded in the file and in the log.'),
 				encoding: z.enum(["utf8", "base64"]).default("utf8").describe("Use base64 for binary files."),
+				mode: z
+					.enum(["replace", "append"])
+					.default("replace")
+					.describe('"replace" (default) rewrites the whole block. "append" adds your text beneath what is already in it.'),
+				return_content: z
+					.boolean()
+					.default(false)
+					.describe("Echo the recorded content back in the spin payload. Off by default — on a create it is the text you just sent."),
+				return_diff: z
+					.boolean()
+					.default(false)
+					.describe("Echo the recorded unified diff back in the spin payload. Off by default."),
 			},
 		},
-		async ({ space_path, path, content, agent, encoding }) => {
+		async ({ space_path, path, content, agent, encoding, mode, return_content, return_diff }) => {
 			if (!(await isSpaceFs(vaultRoot, space_path))) return notASpace(space_path);
 			const ref = buildSpaceRefFs(vaultRoot, space_path);
 			try {
-				const { spin, created, signed_inline } = await writeFileFs(vaultRoot, ref, path, content, agent, encoding);
+				const { spin, created, signed_inline } = await writeFileFs(
+					vaultRoot,
+					ref,
+					path,
+					content,
+					agent,
+					encoding,
+					"observed",
+					mode,
+				);
 				if (spin) await regenerateContextFs(vaultRoot, ref);
 				return ok({
 					space_path,
 					path,
 					created,
+					mode,
 					signed_inline,
-					attribution: signed_inline ? "signed block in the file, and authored_by in the log" : "authored_by in the log",
 					verification: "pending — only a person can verify, in Obsidian",
-					spin,
+					spin: viewSpin(spin, { content: return_content, diff: return_diff }),
 				});
 			} catch (err) {
 				if (err instanceof WriteError || err instanceof StatementContainmentError) return fail(err.message);
@@ -102,7 +132,7 @@ export function registerDeleteFileTool(server: McpServer, vaultRoot: string): vo
 				await removeFileFs(vaultRoot, ref, path);
 				const spin = await appendFileDeletedFs(ref, path);
 				if (spin) await regenerateContextFs(vaultRoot, ref);
-				return ok({ space_path, path, deleted: true, spin });
+				return ok({ space_path, path, deleted: true, spin: viewSpin(spin) });
 			} catch (err) {
 				if (err instanceof WriteError) return fail(err.message);
 				throw err;

@@ -5,7 +5,7 @@ import { foldLogToLastKnownContent } from "../../src/core/content-fold";
 import { computeDiff } from "../../src/core/diff";
 import { shouldRecordFileContent } from "../../src/core/guards";
 import { isIgnoredPath } from "../../src/core/ignore";
-import { isStatementWritable, writeSignedStatement } from "../../src/core/statement";
+import { appendToBlock, isStatementWritable, STATEMENT_WRITABLE_HINT, writeSignedStatement } from "../../src/core/statement";
 import type { Spin, SpinPayload, SpinSource } from "../../src/core/types";
 import { buildSpaceRefFs, hashFileFs, isSpaceFs } from "./space-fs";
 import type { SpaceRefFs } from "./space-fs";
@@ -102,16 +102,36 @@ export async function writeFileFs(
 	agent: string,
 	encoding: "utf8" | "base64" = "utf8",
 	source: SpinSource = "observed",
+	mode: "replace" | "append" = "replace",
 ): Promise<{ spin: Spin | null; created: boolean; signed_inline: boolean }> {
 	const absPath = await resolveWritablePath(vaultRoot, ref, relPath);
 	const created = !(await exists(absPath));
 	const inline = encoding === "utf8" && isStatementWritable(relPath);
 
+	// Append is defined in terms of the signed block, and a format that cannot carry one has no
+	// block to append to. Refusing is the only safe answer: silently falling back to a whole-file
+	// replace would destroy content at precisely the moment the caller believed `append` had made
+	// that impossible, and appending raw bytes to JSON or a PNG corrupts the file outright.
+	if (mode === "append" && !inline) {
+		throw new WriteError(
+			`cannot append to "${relPath}": append writes into the signed block, and this file cannot ` +
+				`carry one (appendable formats are ${STATEMENT_WRITABLE_HINT}, written as utf8). ` +
+				`Send the whole file with mode "replace" instead.`,
+		);
+	}
+
 	await mkdir(dirname(absPath), { recursive: true });
 	if (inline) {
 		const existing = created ? "" : await readFile(absPath, "utf8");
 		const vaultPath = `${ref.path}/${relPath}`;
-		await writeFile(absPath, writeSignedStatement(existing, content, agent, null, vaultPath), "utf8");
+		const final =
+			mode === "append"
+				? appendToBlock(existing, content, "statement", agent, null, vaultPath)
+				: writeSignedStatement(existing, content, agent, null, vaultPath);
+		// Leave the file's mtime alone when nothing changed. The spin is still decided below, under
+		// the log's lock — an early return here would skip the reconciling write in the case where
+		// the file on disk and the log disagree.
+		if (created || final !== existing) await writeFile(absPath, final, "utf8");
 	} else {
 		await writeFile(absPath, encoding === "base64" ? Buffer.from(content, "base64") : content);
 	}

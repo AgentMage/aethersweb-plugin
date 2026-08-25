@@ -3,7 +3,7 @@ import { z } from "zod";
 import { planRegenerationFs } from "../context-fs";
 import { walkSpacesFs } from "../space-fs";
 import type { SpaceRefFs } from "../space-fs";
-import { isUnderOrEqual } from "./helpers";
+import { isUnderOrEqual, ok } from "./helpers";
 
 /**
  * The tree-aware counterpart to check_staleness: same underlying staleness check, but filtered to
@@ -42,16 +42,35 @@ export function registerPlanRegenerationTool(server: McpServer, vaultRoot: strin
 					.string()
 					.optional()
 					.describe('Vault-relative folder path to scope the plan to, e.g. "UserSpace". Omit for the whole vault.'),
+				summary: z
+					.boolean()
+					.default(false)
+					.describe("Keep the ordering but drop the prose — space_path and the two flags only."),
 			},
 		},
-		async ({ under }) => {
+		async ({ under, summary }) => {
 			const refs: SpaceRefFs[] = [];
 			for await (const ref of walkSpacesFs(vaultRoot)) {
 				if (under && !isUnderOrEqual(ref, under)) continue;
 				refs.push(ref);
 			}
 			const plan = await planRegenerationFs(vaultRoot, refs);
-			return { content: [{ type: "text", text: JSON.stringify({ plan }, null, 2) }] };
+			// `reasons` is duplicated into every entry from statement_drift, so the prose is most of
+			// this response's weight. The ordering is the part that cannot be reconstructed.
+			if (summary) {
+				return ok(
+					{
+						total: plan.length,
+						plan: plan.map((e) => ({
+							space_path: e.space_path,
+							needs_regenerate_context: e.needs_regenerate_context,
+							statement_stale: e.statement_stale,
+						})),
+					},
+					true,
+				);
+			}
+			return ok({ plan });
 		},
 	);
 }

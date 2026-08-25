@@ -5,6 +5,7 @@ import { regenerateContextFs } from "../context-fs";
 import { buildSpaceRefFs, isSpaceFs } from "../space-fs";
 import { appendSpinFs } from "../vault-io";
 import { fail, ok } from "./helpers";
+import { viewSpin } from "./spin-view";
 
 /**
  * What this tool may still write, now that real authoring tools exist.
@@ -49,16 +50,20 @@ export function registerAppendSpinTool(server: McpServer, vaultRoot: string): vo
 						subspace_name: z.string().optional(),
 					})
 					.default({}),
+				return_content: z
+					.boolean()
+					.default(false)
+					.describe("Echo any recorded content/diff back in the spin payload. Off by default."),
 			},
 		},
-		async ({ space_path, spin_type, source, payload }) => {
+		async ({ space_path, spin_type, source, payload, return_content }) => {
 			if (!(await isSpaceFs(vaultRoot, space_path))) {
 				return fail(`"${space_path}" is not a claimed space (no .aether/log.jsonl found) — space creation is plugin-only in v1.`);
 			}
 			const ref = buildSpaceRefFs(vaultRoot, space_path);
 			const spin = await appendSpinFs(ref, spin_type, source, payload);
 			await regenerateContextFs(vaultRoot, ref);
-			return ok({ spin });
+			return ok({ spin: viewSpin(spin, { content: return_content, diff: return_content }) });
 		},
 	);
 }

@@ -7,6 +7,7 @@ import { buildSpaceRefFs, isSpaceFs } from "../space-fs";
 import { appendFileDeletedFs, appendSpinGuardedFs } from "../vault-io";
 import { recordWrittenFile, resolveWritablePath, WriteError } from "../write-fs";
 import { fail, notASpace, ok } from "./helpers";
+import { viewSpin } from "./spin-view";
 
 /**
  * Moves a file, within one space or between two.
@@ -27,15 +28,24 @@ export function registerMoveFileTool(server: McpServer, vaultRoot: string): void
 				"each case: a file_renamed spin when it stays inside one space (so its content history " +
 				"stays continuous across the rename), or a removal from the source log plus an arrival " +
 				"in the destination log when it crosses a space boundary, since no single log can " +
-				"speak for both.",
+				"speak for both.\n\n" +
+				"Spins come back as metadata only. That matters most when crossing a boundary: the " +
+				"arrival is recorded as a create, so its payload holds the whole file — a file you did " +
+				"not write and may never have read. Set return_content to see it, or read_log it later.",
 			inputSchema: {
 				from_space: z.string().describe('Vault-relative path of the space the file is in now.'),
 				from_path: z.string().describe("Path relative to from_space."),
 				to_space: z.string().describe("Vault-relative path of the destination space (same as from_space to rename in place)."),
 				to_path: z.string().describe("Path relative to to_space."),
+				return_content: z
+					.boolean()
+					.default(false)
+					.describe("Echo recorded content back in the spin payloads. Off by default."),
+				return_diff: z.boolean().default(false).describe("Echo recorded diffs back in the spin payloads. Off by default."),
 			},
 		},
-		async ({ from_space, from_path, to_space, to_path }) => {
+		async ({ from_space, from_path, to_space, to_path, return_content, return_diff }) => {
+			const view = { content: return_content, diff: return_diff };
 			if (!(await isSpaceFs(vaultRoot, from_space))) return notASpace(from_space);
 			if (!(await isSpaceFs(vaultRoot, to_space))) return notASpace(to_space);
 
@@ -69,14 +79,21 @@ export function registerMoveFileTool(server: McpServer, vaultRoot: string): void
 						payload: { old_path: from_path, path: to_path },
 					}));
 					await regenerateContextFs(vaultRoot, fromRef);
-					return ok({ from_space, from_path, to_space, to_path, crossed_space: false, spin });
+					return ok({ from_space, from_path, to_space, to_path, crossed_space: false, spin: viewSpin(spin, view) });
 				}
 
 				const removed = await appendFileDeletedFs(fromRef, from_path);
 				const arrived = await recordWrittenFile(toRef, to_path, toAbs, "file_created");
 				await regenerateContextFs(vaultRoot, fromRef);
 				await regenerateContextFs(vaultRoot, toRef);
-				return ok({ from_space, from_path, to_space, to_path, crossed_space: true, spins: { removed, arrived } });
+				return ok({
+					from_space,
+					from_path,
+					to_space,
+					to_path,
+					crossed_space: true,
+					spins: { removed: viewSpin(removed, view), arrived: viewSpin(arrived, view) },
+				});
 			} catch (err) {
 				if (err instanceof WriteError) return fail(err.message);
 				throw err;

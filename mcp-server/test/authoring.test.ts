@@ -339,3 +339,58 @@ describe("containment — AI content cannot leave its block", () => {
 		}
 	});
 });
+
+describe("write_file's append mode", () => {
+	it("grows one block instead of resending it", async () => {
+		const ref = await makeSpace("UserSpace");
+		const first = await writeFileFs(vaultRoot, ref, "Intake.md", "Coffee, 07:10.", "test-agent", "utf8", "observed", "append");
+		const second = await writeFileFs(vaultRoot, ref, "Intake.md", "Curry, 19:40.", "test-agent", "utf8", "observed", "append");
+
+		const text = await readFile(join(ref.absPath, "Intake.md"), "utf8");
+		expect(text.split(STATEMENT_START_MARKER)).toHaveLength(2); // exactly one block
+		expect(text.split(SIGNATURE_MARKER_PREFIX)).toHaveLength(2); // one current signature
+		expect(readSignedStatement(text)!.text).toContain("Coffee, 07:10.\n\nCurry, 19:40.");
+		expect(first.created).toBe(true);
+		expect(second.created).toBe(false);
+		// A second entry costs a diff, not another copy of the note.
+		expect(second.spin?.payload.diff).toContain("Curry, 19:40.");
+		expect(second.spin?.payload.content).toBeUndefined();
+		expect(verifyChain(await readLogFs(ref)).ok).toBe(true);
+		expect(verifyContentReplay(await readLogFs(ref)).ok).toBe(true);
+	});
+
+	it("stands down when the text is already at the tail", async () => {
+		const ref = await makeSpace("UserSpace");
+		await writeFileFs(vaultRoot, ref, "Intake.md", "Coffee, 07:10.", "test-agent", "utf8", "observed", "append");
+		const headBefore = await readHeadFs(ref);
+
+		const again = await writeFileFs(vaultRoot, ref, "Intake.md", "Coffee, 07:10.", "test-agent", "utf8", "observed", "append");
+		expect(again.spin).toBeNull();
+		expect(await readHeadFs(ref)).toBe(headBefore);
+	});
+
+	it("leaves the person's own writing outside the block untouched across appends", async () => {
+		const ref = await makeSpace("UserSpace");
+		await writeFileFs(vaultRoot, ref, "Intake.md", "first", "test-agent", "utf8", "observed", "append");
+		const path = join(ref.absPath, "Intake.md");
+		await writeFile(path, (await readFile(path, "utf8")) + "\n# My own heading\n\nMine.\n", "utf8");
+
+		await writeFileFs(vaultRoot, ref, "Intake.md", "second", "test-agent", "utf8", "observed", "append");
+		const text = await readFile(path, "utf8");
+		expect(text).toContain("# My own heading\n\nMine.\n");
+		expect(readSignedStatement(text)!.text).toContain("first\n\nsecond");
+	});
+
+	it("refuses formats that have no block to append to", async () => {
+		const ref = await makeSpace("UserSpace");
+		for (const [path, encoding] of [
+			["data.json", "utf8"],
+			["rows.csv", "utf8"],
+			["pic.png", "base64"],
+		] as const) {
+			await expect(
+				writeFileFs(vaultRoot, ref, path, encoding === "base64" ? "AAAA" : "{}", "test-agent", encoding, "observed", "append"),
+			).rejects.toBeInstanceOf(WriteError);
+		}
+	});
+});

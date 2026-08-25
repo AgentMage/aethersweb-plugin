@@ -361,6 +361,71 @@ async function diffSubspaces(
 	return results;
 }
 
+/** One stale space, reduced to what a triage decision actually turns on. */
+export interface StalenessSummaryEntry {
+	space_path: string;
+	/** Spins since the last statement, folder-note spins already excluded — see spinsSinceStatement. */
+	spin_count: number;
+	/** A subspace appeared or vanished among *this space's own* spins since its last statement. */
+	structural: boolean;
+	/** This space's index is behind, or a subspace tip drifted — i.e. regenerate_context has work. */
+	needs_context: boolean;
+}
+
+export interface StalenessSummary {
+	total_spaces: number;
+	stale_count: number;
+	never_written_count: number;
+	needs_context_count: number;
+	/** Paths only. A space with no statement carries no drift facts worth a whole object. */
+	never_written: string[];
+	/** Spaces that have a statement and have drifted from it. */
+	stale: StalenessSummaryEntry[];
+}
+
+/**
+ * Reduces a full staleness walk to the small answer: what is stale, and how much.
+ *
+ * Never-written spaces come back as bare paths rather than objects, and that is not only a size
+ * decision. `describeStatementDrift` hard-returns empty `structuralChanges` and a canned reason on
+ * its `!hasStatement` branch, so `spin_count` and `structural` on a space with no statement carry
+ * no information beyond the one bit `never_written` already carries. Listing them as full objects
+ * would spend bytes restating that bit. `stale` therefore means what an agent actually triages:
+ * there is a prior claim, and it has moved. As statements get written the two lists trade places
+ * and the payload stays roughly flat.
+ */
+export function summarizeStaleness(spaces: SpaceStaleness[]): StalenessSummary {
+	const never_written: string[] = [];
+	const stale: StalenessSummaryEntry[] = [];
+	let needs_context_count = 0;
+
+	for (const s of spaces) {
+		const needs_context = s.frontmatter_stale || s.subspaces.some((sub) => sub.status !== "ok");
+		if (needs_context) needs_context_count++;
+		if (!s.stale) continue;
+
+		if (s.statement_drift?.neverWritten) {
+			never_written.push(s.space_path);
+			continue;
+		}
+		stale.push({
+			space_path: s.space_path,
+			spin_count: s.statement_drift?.spinCount ?? 0,
+			structural: (s.statement_drift?.structuralChanges.length ?? 0) > 0,
+			needs_context,
+		});
+	}
+
+	return {
+		total_spaces: spaces.length,
+		stale_count: spaces.filter((s) => s.stale).length,
+		never_written_count: never_written.length,
+		needs_context_count,
+		never_written,
+		stale,
+	};
+}
+
 export interface RegenerationPlanEntry {
 	space_path: string;
 	/** Number of "/"-separated segments in space_path — deeper means further from the vault root. */
